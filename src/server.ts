@@ -25,7 +25,8 @@ function parseAmount(raw: string | null | undefined): AmountInfo | null {
   return null;
 }
 
-// Si el servidor cayó durante un callback en vuelo, recupera a 'pending' los registros que aún conservan pending_json
+// Si el servidor cayó durante un callback en vuelo antes de consumir el grant, recupera a 'pending' los registros con pending_json.
+// Límite: si cae después de consumir grant.continue o de crear el outgoing-payment remoto, el continueToken ya fue usado y no es reintentable.
 db.prepare("UPDATE contributions SET status='pending' WHERE status='processing' AND pending_json IS NOT NULL").run();
 
 // Pasa a 'failed' los aportes 'pending' cuya cotización (pending_json.expiresAt) ya venció
