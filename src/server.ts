@@ -142,18 +142,30 @@ app.get('/api/contributions/:id/finish', async (req, res) => {
   if (!row) return res.status(404).send('Aporte no encontrado');
   // Un callback ya procesado (recarga del navegador, reenvío) no debe ejecutar otro pago
   if (!row.pending_json || row.status === 'confirmed') return res.redirect(`/?circle=${row.circle_id}`);
+
+  // Reserva atómica antes del primer await: consume pending_json en SQLite para que un segundo callback concurrente no entre a finishPayment
+  const pendingRaw = String(row.pending_json);
+  const claim = db.prepare(
+    "UPDATE contributions SET pending_json=NULL WHERE id=? AND pending_json IS NOT NULL AND status != 'confirmed'",
+  ).run(id);
+  if (claim.changes === 0) return res.redirect(`/?circle=${row.circle_id}`);
+
   try {
     if (req.query.result === 'grant_rejected') throw new Error('El miembro rechazó el pago');
     const outgoing = await finishPayment({
-      state: JSON.parse(row.pending_json) as PendingPayment,
+      state: JSON.parse(pendingRaw) as PendingPayment,
       interactRef: String(req.query.interact_ref),
       hash: String(req.query.hash),
     });
-    db.prepare("UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL WHERE id=?").run(outgoing.id, id);
+    db.prepare(
+      "UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL WHERE id=? AND status != 'confirmed'",
+    ).run(outgoing.id, id);
     res.redirect(`/?circle=${row.circle_id}&ok=1`);
   } catch (e: any) {
     console.error(e);
-    db.prepare("UPDATE contributions SET status='failed', pending_json=NULL WHERE id=?").run(id);
+    db.prepare(
+      "UPDATE contributions SET status='failed', pending_json=NULL WHERE id=? AND status != 'confirmed'",
+    ).run(id);
     res.redirect(`/?circle=${row.circle_id}&error=${encodeURIComponent(e.message)}`);
   }
 });
