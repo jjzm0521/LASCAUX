@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS contributions (
   receive_value TEXT NOT NULL,
   receive_json TEXT,
   debit_json TEXT,
-  status TEXT NOT NULL DEFAULT 'pending',    -- pending | confirmed | failed
+  expires_at TEXT,
+  error_msg TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',    -- pending | processing | confirmed | failed
   pending_json TEXT,
   outgoing_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -53,8 +55,10 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 // Migración ligera para bases circulos.db ya creadas antes de agregar columnas nuevas
 const contribCols = db.prepare('PRAGMA table_info(contributions)').all() as { name: string }[];
-if (!contribCols.some((c) => c.name === 'receive_json')) {
-  db.exec('ALTER TABLE contributions ADD COLUMN receive_json TEXT');
+for (const col of ['receive_json', 'expires_at', 'error_msg']) {
+  if (!contribCols.some((c) => c.name === col)) {
+    db.exec(`ALTER TABLE contributions ADD COLUMN ${col} TEXT`);
+  }
 }
 const payoutCols = db.prepare('PRAGMA table_info(payouts)').all() as { name: string }[];
 if (!payoutCols.some((c) => c.name === 'purpose')) {

@@ -32,18 +32,23 @@ db.prepare("UPDATE contributions SET status='pending' WHERE status='processing' 
 // Pasa a 'failed' los aportes 'pending' cuya cotización (pending_json.expiresAt) ya venció
 function expirePendingContributions(circleId?: number) {
   const rows = (circleId !== undefined
-    ? db.prepare("SELECT id, pending_json FROM contributions WHERE circle_id=? AND status='pending'").all(circleId)
-    : db.prepare("SELECT id, pending_json FROM contributions WHERE status='pending'").all()) as any[];
+    ? db.prepare("SELECT id, pending_json, expires_at FROM contributions WHERE circle_id=? AND status='pending'").all(circleId)
+    : db.prepare("SELECT id, pending_json, expires_at FROM contributions WHERE status='pending'").all()) as any[];
   const now = Date.now();
-  const markFailed = db.prepare("UPDATE contributions SET status='failed' WHERE id=? AND status='pending'");
+  const markFailed = db.prepare(
+    "UPDATE contributions SET status='failed', error_msg=COALESCE(error_msg, 'La cotización venció, vuelve a intentar') WHERE id=? AND status='pending'",
+  );
   for (const r of rows) {
-    if (!r.pending_json) continue;
-    try {
-      const state = JSON.parse(r.pending_json) as PendingPayment;
-      if (state.expiresAt && now >= Date.parse(state.expiresAt)) {
+    let exp = r.expires_at as string | undefined;
+    if (!exp && r.pending_json) {
+      try {
+        exp = (JSON.parse(r.pending_json) as PendingPayment).expiresAt;
+      } catch {
         markFailed.run(r.id);
+        continue;
       }
-    } catch {
+    }
+    if (exp && now >= Date.parse(exp)) {
       markFailed.run(r.id);
     }
   }
@@ -57,8 +62,25 @@ app.get('/api/circles/:id', (req, res) => {
 
   expirePendingContributions(id);
 
-  const members = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(id) as any[];
-  const currentTurn = members.length ? ((circle.round - 1) % members.length) + 1 : 1;
+  const rawMembers = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(id) as any[];
+  const currentTurn = rawMembers.length ? ((circle.round - 1) % rawMembers.length) + 1 : 1;
+
+  const activeRoundContribs = new Set(
+    (
+      db.prepare(
+        "SELECT member_id FROM contributions WHERE circle_id=? AND round=? AND status IN ('confirmed','processing')",
+      ).all(id, circle.round) as { member_id: number }[]
+    ).map((r) => r.member_id),
+  );
+  const hasRoundPayout = Boolean(
+    db.prepare('SELECT id FROM payouts WHERE circle_id=? AND round=?').get(id, circle.round),
+  );
+
+  const members = rawMembers.map((m) => ({
+    ...m,
+    hasContributed: activeRoundContribs.has(m.id),
+    canRequestPayout: !hasRoundPayout && (circle.kind === 'circulo' || m.turn === currentTurn),
+  }));
 
   const rawLedger = db.prepare(`SELECT c.id, c.member_id, m.name, m.country, c.round, c.receive_value, c.debit_json, c.receive_json, c.pending_json, c.status, c.created_at
     FROM contributions c JOIN members m ON m.id=c.member_id WHERE c.circle_id=? ORDER BY c.id DESC`).all(id) as any[];
@@ -85,10 +107,50 @@ app.get('/api/circles/:id', (req, res) => {
     };
   });
 
-  const payouts = db.prepare(`SELECT p.*, m.name,
+  const rawPayouts = db.prepare(`SELECT p.*, m.name,
     (SELECT COUNT(*) FROM approvals a WHERE a.payout_id=p.id) approvals
-    FROM payouts p JOIN members m ON m.id=p.member_id WHERE p.circle_id=? ORDER BY p.id DESC`).all(id);
+    FROM payouts p JOIN members m ON m.id=p.member_id WHERE p.circle_id=? ORDER BY p.id DESC`).all(id) as any[];
+  const approvalsStmt = db.prepare('SELECT member_id FROM approvals WHERE payout_id=? ORDER BY member_id');
+  const payouts = rawPayouts.map((p) => ({
+    ...p,
+    approvedBy: (approvalsStmt.all(p.id) as { member_id: number }[]).map((a) => a.member_id),
+  }));
+
   res.json({ circle: { ...circle, currentTurn }, members, ledger, payouts, reputation: reputation(id) });
+});
+
+// Estado individual de un aporte para el stepper de la interfaz
+app.get('/api/contributions/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const initial = db.prepare('SELECT circle_id FROM contributions WHERE id=?').get(id) as { circle_id: number } | undefined;
+  if (!initial) return res.status(404).json({ error: 'Aporte no encontrado' });
+
+  expirePendingContributions(initial.circle_id);
+
+  const row = db.prepare('SELECT * FROM contributions WHERE id=?').get(id) as any;
+  const debit = parseAmount(row.debit_json);
+  let receive = parseAmount(row.receive_json);
+  let expiresAt: string | null = row.expires_at ?? null;
+  if (row.pending_json) {
+    try {
+      const state = JSON.parse(row.pending_json) as PendingPayment;
+      if (!receive) receive = parseAmount(JSON.stringify(state.receive));
+      if (!expiresAt && state.expiresAt) expiresAt = state.expiresAt;
+    } catch {}
+  }
+
+  const out: Record<string, any> = {
+    id: row.id,
+    circleId: row.circle_id,
+    memberId: row.member_id,
+    round: row.round,
+    status: row.status,
+    expiresAt,
+    debit,
+    receive,
+  };
+  if (row.error_msg) out.error = row.error_msg;
+  res.json(out);
 });
 
 // 1) Solicitud de aporte -> devuelve URL de autorización en la billetera del miembro
@@ -115,7 +177,7 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
 
     // Si el miembro tenía un aporte 'pending' abandonado en la misma ronda, pasa a 'failed' al pedir uno nuevo
     db.prepare(
-      "UPDATE contributions SET status='failed', pending_json=NULL WHERE circle_id=? AND member_id=? AND round=? AND status='pending'",
+      "UPDATE contributions SET status='failed', pending_json=NULL, error_msg='Reemplazado por un nuevo intento de aporte' WHERE circle_id=? AND member_id=? AND round=? AND status='pending'",
     ).run(circleId, member.id, circle.round);
 
     const row = db.prepare('INSERT INTO contributions (circle_id, member_id, round, receive_value) VALUES (?,?,?,?)')
@@ -129,12 +191,18 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
         receiveValue: String(circle.contribution),
         finishUri: `${BASE}/api/contributions/${contributionId}/finish`,
       });
-      db.prepare('UPDATE contributions SET pending_json=?, debit_json=?, receive_json=? WHERE id=?')
-        .run(JSON.stringify(state), JSON.stringify(state.debit), JSON.stringify(state.receive), contributionId);
+      db.prepare('UPDATE contributions SET pending_json=?, debit_json=?, receive_json=?, expires_at=? WHERE id=?')
+        .run(
+          JSON.stringify(state),
+          JSON.stringify(state.debit),
+          JSON.stringify(state.receive),
+          state.expiresAt ?? null,
+          contributionId,
+        );
       res.json({ contributionId, redirectUrl, debit: state.debit, receive: state.receive, expiresAt: state.expiresAt });
-    } catch (e) {
+    } catch (e: any) {
       // Si Open Payments falla antes de la autorización, no dejar un aporte "pendiente" colgado en el libro
-      db.prepare("UPDATE contributions SET status='failed' WHERE id=?").run(contributionId);
+      db.prepare("UPDATE contributions SET status='failed', error_msg=? WHERE id=?").run(e?.message ?? 'Error al iniciar el pago', contributionId);
       throw e;
     }
   } catch (e: any) {
@@ -167,14 +235,14 @@ app.get('/api/contributions/:id/finish', async (req, res) => {
       hash: String(req.query.hash),
     });
     db.prepare(
-      "UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL WHERE id=? AND status='processing'",
+      "UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL, error_msg=NULL WHERE id=? AND status='processing'",
     ).run(outgoing.id, id);
     res.redirect(`/?circle=${row.circle_id}&ok=1`);
   } catch (e: any) {
     console.error(e);
     db.prepare(
-      "UPDATE contributions SET status='failed', pending_json=NULL WHERE id=? AND status='processing'",
-    ).run(id);
+      "UPDATE contributions SET status='failed', pending_json=NULL, error_msg=? WHERE id=? AND status='processing'",
+    ).run(e?.message ?? 'Error al confirmar el aporte', id);
     res.redirect(`/?circle=${row.circle_id}&error=${encodeURIComponent(e.message)}`);
   }
 });

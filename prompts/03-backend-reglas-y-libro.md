@@ -26,3 +26,8 @@ Acuerdo de diseño:
 - En `seed.ts`, usar `POT_WALLET` (`receptor_op`, USD) como caja y `WALLET_CO` (`emisor_op`, COP) como wallet emisora cuando `WALLET_CO2` no exista o cuando `WALLET_US` coincida con `POT_WALLET`, evitando que un miembro se pague a la misma wallet de la caja.
 - Concurrencia en `/api/contributions/:id/finish` (una instancia de servidor): reserva atómica con `status='processing'` antes del primer `await` conservando `pending_json` durante el vuelo y condicionando las escrituras finales a `status='processing'`.
 - Límite documentado de recuperación: al reiniciar el servidor se restauran a `'pending'` las filas `'processing'` que conservan `pending_json`, lo cual cubre caídas previas a consumir `grant.continue`; si el proceso cae después de consumir el grant o de crear el `outgoing-payment` remoto antes de escribir en SQLite, no es reintentable con el mismo `continueToken` porque no se persiste el token intermedio.
+- Solicitud de C (congelamiento de contrato e interfaz):
+  - En `GET /api/circles/:id`: `members[]` incluye `hasContributed` y `canRequestPayout`; `payouts[]` incluye `approvedBy: number[]`.
+  - Nuevo endpoint `GET /api/contributions/:id` para el stepper (`{ id, circleId, memberId, round, status, expiresAt, debit, receive, error? }`) respaldado por columnas `expires_at` y `error_msg`.
+  - En `src/seed.ts`: Mamá usa `country: 'CO'` cuando comparte la wallet COP (`emisor_op`), y `'US'` solo si se configura un `WALLET_US` distinto de `POT_WALLET`.
+  - Decisión de producto (punto 6): se permite solicitar/aprobar desembolso y cerrar la ronda sin exigir que los 3 miembros hayan aportado primero (para agilizar la demo en vivo con 1 pago real; la reputación refleja los aportes faltantes).
