@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Círculos</title>
+<style>
+body{font-family:system-ui;max-width:720px;margin:0 auto;padding:16px;background:#fafaf7;color:#222}
+.card{background:#fff;border:1px solid #e3e3dc;border-radius:10px;padding:14px;margin:12px 0}
+button{padding:8px 12px;border-radius:8px;border:0;background:#0b6e4f;color:#fff;cursor:pointer}
+.ok{color:#0b6e4f}.bad{color:#b00020}.pending{color:#a60}
+.score{font-size:2rem;font-weight:700}
+</style></head><body>
+<h1 id="title">Círculo</h1>
+<div id="msg"></div>
+<div class="card"><div>Reputación del círculo</div><div class="score" id="score">–</div><small id="scoreDetail"></small></div>
+<div class="card"><h3>Miembros</h3><div id="members"></div></div>
+<div class="card"><h3>Libro de aportes (visible para todos)</h3><div id="ledger"></div></div>
+<div class="card"><h3>Desembolsos</h3><div id="payouts"></div></div>
+<script>
+const q=new URLSearchParams(location.search), id=q.get('circle')||1;
+const api=(u,o)=>fetch(u,o).then(r=>r.json());
+const post=(u,b)=>api(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});
+const fmt=(v,a=2)=>(Number(v)/10**a).toFixed(a);
+async function load(){
+  const d=await api('/api/circles/'+id);
+  title.textContent=d.circle.name+' · ronda '+d.circle.round;
+  score.textContent=d.reputation.score+'%';
+  scoreDetail.textContent=d.reputation.confirmed+' de '+d.reputation.expected+' aportes confirmados';
+  if(q.get('ok'))msg.innerHTML='<p class=ok>✔ Aporte confirmado</p>';
+  if(q.get('error'))msg.innerHTML='<p class=bad>'+q.get('error')+'</p>';
+  members.innerHTML=d.members.map(m=>`<div>${m.turn}. ${m.name} (${m.country}) <button onclick="contribute(${m.id})">Aportar</button> <button onclick="payout(${m.id})">Pedir desembolso</button></div>`).join('');
+  ledger.innerHTML=d.ledger.map(l=>`<div class="${l.status=='confirmed'?'ok':l.status=='failed'?'bad':'pending'}">${l.name} (${l.country}) · ronda ${l.round} · recibe ${fmt(l.receive_value)} · ${l.status}</div>`).join('')||'Sin aportes';
+  payouts.innerHTML=d.payouts.map(p=>`<div>${p.name}: ${fmt(p.amount)} · ${p.approvals}/${d.circle.min_approvals} aprobaciones · ${p.status}
+    ${d.members.filter(m=>m.id!=p.member_id).map(m=>`<button onclick="approve(${p.id},${m.id})">Aprueba ${m.name}</button>`).join(' ')}</div>`).join('')||'Ninguno';
+}
+async function contribute(memberId){
+  const r=await post('/api/circles/'+id+'/contribute',{memberId});
+  if(r.error)return msg.innerHTML='<p class=bad>'+r.error+'</p>';
+  if(confirm('Se debitarán '+fmt(r.debit.value,r.debit.assetScale)+' '+r.debit.assetCode+'. ¿Continuar a autorizar?'))location=r.redirectUrl;
+}
+const payout=async memberId=>{await post('/api/circles/'+id+'/payouts',{memberId});load()};
+const approve=async(pid,memberId)=>{await post('/api/payouts/'+pid+'/approve',{memberId});load()};
+load();setInterval(load,5000);
+</script></body></html>

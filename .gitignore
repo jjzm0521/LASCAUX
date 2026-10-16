@@ -1,0 +1,13 @@
+node_modules
+.env
+private.key
+*.db
+
+# Credenciales y archivos locales
+*.key
+*.pem
+.env.*
+!.env.example
+.DS_Store
+*.db-shm
+*.db-wal
