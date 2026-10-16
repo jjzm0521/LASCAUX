@@ -25,6 +25,9 @@ function parseAmount(raw: string | null | undefined): AmountInfo | null {
   return null;
 }
 
+// Si el servidor cayó durante un callback en vuelo, recupera a 'pending' los registros que aún conservan pending_json
+db.prepare("UPDATE contributions SET status='pending' WHERE status='processing' AND pending_json IS NOT NULL").run();
+
 // Pasa a 'failed' los aportes 'pending' cuya cotización (pending_json.expiresAt) ya venció
 function expirePendingContributions(circleId?: number) {
   const rows = (circleId !== undefined
@@ -76,7 +79,7 @@ app.get('/api/circles/:id', (req, res) => {
       receive_value: r.receive_value,
       debit,
       receive,
-      status: r.status,
+      status: r.status === 'processing' ? 'pending' : r.status,
       created_at: r.created_at,
     };
   });
@@ -97,12 +100,16 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
 
     expirePendingContributions(circleId);
 
-    // Regla: un solo aporte confirmado por miembro por ronda
-    const alreadyConfirmed = db.prepare(
-      "SELECT id FROM contributions WHERE circle_id=? AND member_id=? AND round=? AND status='confirmed'",
-    ).get(circleId, member.id, circle.round);
-    if (alreadyConfirmed) {
-      return res.status(400).json({ error: 'Ya tienes un aporte confirmado en esta ronda' });
+    // Regla: un solo aporte confirmado (o en confirmación activa) por miembro por ronda
+    const activeOrConfirmed = db.prepare(
+      "SELECT status FROM contributions WHERE circle_id=? AND member_id=? AND round=? AND status IN ('confirmed','processing')",
+    ).get(circleId, member.id, circle.round) as any;
+    if (activeOrConfirmed) {
+      return res.status(400).json({
+        error: activeOrConfirmed.status === 'processing'
+          ? 'Tu aporte se está confirmando en este momento'
+          : 'Ya tienes un aporte confirmado en esta ronda',
+      });
     }
 
     // Si el miembro tenía un aporte 'pending' abandonado en la misma ronda, pasa a 'failed' al pedir uno nuevo
@@ -140,31 +147,32 @@ app.get('/api/contributions/:id/finish', async (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM contributions WHERE id=?').get(id) as any;
   if (!row) return res.status(404).send('Aporte no encontrado');
-  // Un callback ya procesado (recarga del navegador, reenvío) no debe ejecutar otro pago
-  if (!row.pending_json || row.status === 'confirmed') return res.redirect(`/?circle=${row.circle_id}`);
+  // Un callback ya procesado o en curso no debe ejecutar otro pago
+  if (!row.pending_json || row.status === 'confirmed' || row.status === 'processing') {
+    return res.redirect(`/?circle=${row.circle_id}`);
+  }
 
-  // Reserva atómica antes del primer await: consume pending_json en SQLite para que un segundo callback concurrente no entre a finishPayment
-  const pendingRaw = String(row.pending_json);
+  // Reserva atómica antes del primer await sin borrar pending_json (si el proceso cae durante el await, al reiniciar recupera pending_json)
   const claim = db.prepare(
-    "UPDATE contributions SET pending_json=NULL WHERE id=? AND pending_json IS NOT NULL AND status != 'confirmed'",
+    "UPDATE contributions SET status='processing' WHERE id=? AND pending_json IS NOT NULL AND status IN ('pending','failed')",
   ).run(id);
   if (claim.changes === 0) return res.redirect(`/?circle=${row.circle_id}`);
 
   try {
     if (req.query.result === 'grant_rejected') throw new Error('El miembro rechazó el pago');
     const outgoing = await finishPayment({
-      state: JSON.parse(pendingRaw) as PendingPayment,
+      state: JSON.parse(row.pending_json) as PendingPayment,
       interactRef: String(req.query.interact_ref),
       hash: String(req.query.hash),
     });
     db.prepare(
-      "UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL WHERE id=? AND status != 'confirmed'",
+      "UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL WHERE id=? AND status='processing'",
     ).run(outgoing.id, id);
     res.redirect(`/?circle=${row.circle_id}&ok=1`);
   } catch (e: any) {
     console.error(e);
     db.prepare(
-      "UPDATE contributions SET status='failed', pending_json=NULL WHERE id=? AND status != 'confirmed'",
+      "UPDATE contributions SET status='failed', pending_json=NULL WHERE id=? AND status='processing'",
     ).run(id);
     res.redirect(`/?circle=${row.circle_id}&error=${encodeURIComponent(e.message)}`);
   }
