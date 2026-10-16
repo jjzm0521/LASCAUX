@@ -50,7 +50,7 @@ SQLite confirmó aporte 1, status `confirmed`, outgoing_id `https://ilp.interled
 
 La wallet COP permitió crear tanto el pago CLI como el aporte del seed por 1000 unidades USD (10,00 USD), debitando 31.766,58 COP cada uno. No se consultó saldo restante. Un segundo intento en la app falló al crear incoming con `description: 'fetch failed'`; quedó `failed`.
 
-## Coordinación pendiente con B, C y D
+## Coordinación inicial con B, C y D (antes de f004f3e)
 
 No se identificaron chats de B/C/D en esta sesión; no se ha enviado ningún mensaje ni acordado cambios con ellos.
 
@@ -77,3 +77,14 @@ El módulo nuevo verifica expiresAt después de validar el hash y otra vez despu
 Validación: `npm run typecheck`, `npm run op:test` y `git diff --check` pasan. Captura del libro: app-confirmed.png.
 
 El usuario confirmó que B está trabajando en seed/API/expiraciones y recibió las preguntas exactas para coordinar esos cambios; aún no hay respuesta técnica ni commit de B.
+
+## Respuesta de B verificada: f004f3e
+
+Se recibió la respuesta de B y se contrastó con el código del commit, presente en este checkout. Typecheck y op:test pasan también sobre ese commit. No se repitieron los pagos de la evidencia anterior después de sus cambios.
+
+- Seed: caja Receptor USD; los tres perfiles usan Emisor COP por defecto. WALLET_US se usa si difiere literalmente de POT_WALLET y WALLET_CO2 cae a WALLET_CO. Esto permite una demo con tres perfiles, pero no acredita tres dueños de wallets ni aprobadores independientes. No actualiza círculos ya sembrados. La validación de wallets debe comparar URLs normalizadas y cubrir también WALLET_CO y WALLET_CO2 para garantizar que ninguna coincida con la caja.
+- Expiración: se ejecuta al leer el círculo y antes de iniciar otro aporte; no hay tarea periódica sin tráfico. Se conserva pending_json al expirar por reloj para que el callback pueda mostrar el error español. Al iniciar otro aporte, se invalidan los pending anteriores del mismo miembro/ronda.
+- API para C: ledger incluye debit y receive como objetos `{ value, assetCode, assetScale }` o null. receive_json conserva el activo receptor después de confirmar. Para filas antiguas sin receive_json, solo existe fallback mientras quede pending_json; un aporte antiguo confirmed como el aporte 1 de esta evidencia puede seguir devolviendo receive=null. La UI no debe inventar moneda/escala en ese caso.
+- Concurrencia pendiente: la guarda que B describe como «sin conflicto con callbacks simultáneos» no reserva la fila antes del primer await. Dos callbacks pueden leer el mismo pending_json y entrar en finishPayment; la actualización condicional del expirador no evita esa carrera. Una respuesta fallida puede además sobrescribir el confirmed de la otra porque las escrituras finales son incondicionales. Pedir a B exclusión atómica del procesamiento y escrituras finales condicionadas al estado/propietario del intento. No basta con un AND status='pending' solo en la escritura final, porque el efecto remoto ya se habría intentado.
+
+Los archivos de B no se modificaron durante esta revisión. La corrección de concurrencia sigue a cargo de B.

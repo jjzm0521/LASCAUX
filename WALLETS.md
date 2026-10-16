@@ -58,6 +58,6 @@ El ejemplo oficial solicita 1000 unidades mínimas de la moneda receptora: 10 US
 ## Límites del estado actual
 
 - Se crearon outgoing payments reales en testnet en ambos sentidos y se probó Aportar desde la app, con registro local confirmed. Salidas, identificadores y límites de esa evidencia: [docs/open-payments-evidence.md](docs/open-payments-evidence.md). No se verificó liquidación remota final.
-- El seed actual crea tres miembros de demostración; estas dos wallets no bastan para representar tres personas distintas ni una caja independiente. No ejecutes seed repetidamente: añade nuevos círculos.
+- Desde f004f3e, el seed crea tres perfiles que comparten Emisor COP por defecto y usa Receptor USD como caja. Es una simulación con una sola wallet emisora; no demuestra tres propietarios o aprobadores independientes. Los círculos creados antes no se actualizan. No ejecutes seed repetidamente: añade nuevos círculos.
 - La app coordina aportes hacia una caja. La ruta de desembolsos actual registra solicitudes y aprobaciones, pero todavía no ejecuta el pago del desembolso por Open Payments.
 - La clave local configurada se compartió previamente en el chat. Reemplázala por una nueva antes de seguir utilizando esa identidad. No publiques .env, claves ni bases de datos.
