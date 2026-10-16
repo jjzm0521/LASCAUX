@@ -2,7 +2,7 @@
 //   npm run op:test
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { verifyHash, toUrl } from './openPayments.js';
+import { verifyHash, toUrl, finishPayment, type PendingPayment } from './openPayments.js';
 
 // Vector de https://openpayments.dev/identity/hash-verification/
 const v = {
@@ -23,4 +23,18 @@ assert.equal(verifyHash({ ...v, hash: '' }), false, 'hash vacío');
 assert.equal(toUrl('$ilp.interledger-test.dev/emisor_op'), 'https://ilp.interledger-test.dev/emisor_op');
 assert.equal(toUrl('https://ilp.interledger-test.dev/emisor_op'), 'https://ilp.interledger-test.dev/emisor_op');
 
-console.log('op:test OK (hash e URLs de billetera)');
+// Callback auténtico pero tardío: debe rechazarse antes de acceder al cliente o la red.
+const expired: PendingPayment = {
+  nonce: v.clientNonce, interactNonce: v.interactNonce, authServer: v.authServer,
+  senderWallet: 'https://sender.example', quoteId: 'https://sender.example/quote',
+  continueUri: 'https://server.example.com/continue', continueToken: 'offline-fixture',
+  debit: { value: '100', assetCode: 'COP', assetScale: 2 },
+  receive: { value: '100', assetCode: 'USD', assetScale: 2 },
+  expiresAt: '2000-01-01T00:00:00Z',
+};
+await assert.rejects(finishPayment({ state: expired, interactRef: v.interactRef, hash: docHash }),
+  { message: 'La cotización venció, vuelve a intentar' });
+await assert.rejects(finishPayment({ state: expired, interactRef: v.interactRef, hash: '' }),
+  { message: 'Hash de interacción inválido' });
+
+console.log('op:test OK (hash, URLs de billetera y callback vencido sin red)');

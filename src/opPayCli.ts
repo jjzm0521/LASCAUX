@@ -14,7 +14,7 @@ if (!sender || !receiver) {
 }
 
 const PORT = Number(process.env.OP_CALLBACK_PORT ?? 3999);
-const WAIT_MS = 5 * 60_000; // la cotización caduca pronto: no tiene sentido esperar más
+const WAIT_MS = 10 * 60_000; // permite autorizar después de expiresAt para probar el error de cotización vencida
 
 async function main() {
   const finishUri = `http://localhost:${PORT}/finish`;

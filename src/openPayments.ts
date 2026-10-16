@@ -160,6 +160,11 @@ export async function finishPayment(opts: {
   const ok = verifyHash({ ...args, authServer: base }) || verifyHash({ ...args, authServer: base + '/' });
   if (!ok) throw new Error('Hash de interacción inválido');
 
+  // No consumir el grant ni intentar crear un pago con una cotización ya vencida.
+  if (state.expiresAt && Date.now() >= Date.parse(state.expiresAt)) {
+    throw new Error('La cotización venció, vuelve a intentar');
+  }
+
   const c = await getClient();
   const sender = await c.walletAddress.get({ url: toUrl(state.senderWallet) });
   const grant = await c.grant.continue(
@@ -167,6 +172,11 @@ export async function finishPayment(opts: {
     { interact_ref: opts.interactRef },
   );
   if (!isFinalizedGrantWithAccessToken(grant)) throw new Error('El usuario aún no autorizó el pago');
+
+  // La continuación también puede tardar y cruzar el vencimiento.
+  if (state.expiresAt && Date.now() >= Date.parse(state.expiresAt)) {
+    throw new Error('La cotización venció, vuelve a intentar');
+  }
 
   const outgoing = await c.outgoingPayment.create(
     { url: sender.resourceServer, accessToken: grant.access_token.value },

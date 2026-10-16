@@ -30,3 +30,7 @@ npm run setup
 Instala las versiones del lockfile, crea `.env` sin sobrescribir uno existente y ejecuta la revisión de tipos. Funciona en macOS, Linux y Windows. No instala el ejemplo independiente ni ejecuta pagos. Completa las credenciales en `.env` antes de probar Open Payments.
 
 Después, crea datos de ejemplo **una sola vez** con `npm run seed` (repetirlo añade otro círculo) y arranca con `npm run dev`.
+
+## Wallets para la demo
+
+Consulta [WALLETS.md](WALLETS.md) para Juan Pérez (COP), Sofía Ramírez (USD) y la configuración de pagos en ambos sentidos.
