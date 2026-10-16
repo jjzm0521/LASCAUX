@@ -34,15 +34,21 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
       .run(circleId, member.id, circle.round, String(circle.contribution));
     const contributionId = Number(row.lastInsertRowid);
 
-    const { redirectUrl, state } = await startPayment({
-      senderWallet: member.wallet,
-      receiverWallet: circle.pot_wallet,
-      receiveValue: String(circle.contribution),
-      finishUri: `${BASE}/api/contributions/${contributionId}/finish`,
-    });
-    db.prepare('UPDATE contributions SET pending_json=?, debit_json=? WHERE id=?')
-      .run(JSON.stringify(state), JSON.stringify(state.debit), contributionId);
-    res.json({ contributionId, redirectUrl, debit: state.debit, receive: state.receive });
+    try {
+      const { redirectUrl, state } = await startPayment({
+        senderWallet: member.wallet,
+        receiverWallet: circle.pot_wallet,
+        receiveValue: String(circle.contribution),
+        finishUri: `${BASE}/api/contributions/${contributionId}/finish`,
+      });
+      db.prepare('UPDATE contributions SET pending_json=?, debit_json=? WHERE id=?')
+        .run(JSON.stringify(state), JSON.stringify(state.debit), contributionId);
+      res.json({ contributionId, redirectUrl, debit: state.debit, receive: state.receive, expiresAt: state.expiresAt });
+    } catch (e) {
+      // Si Open Payments falla antes de la autorización, no dejar un aporte "pendiente" colgado en el libro
+      db.prepare("UPDATE contributions SET status='failed' WHERE id=?").run(contributionId);
+      throw e;
+    }
   } catch (e: any) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -53,7 +59,9 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
 app.get('/api/contributions/:id/finish', async (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM contributions WHERE id=?').get(id) as any;
-  if (!row?.pending_json) return res.status(404).send('Aporte no encontrado');
+  if (!row) return res.status(404).send('Aporte no encontrado');
+  // Un callback ya procesado (recarga del navegador, reenvío) no debe ejecutar otro pago
+  if (!row.pending_json || row.status !== 'pending') return res.redirect(`/?circle=${row.circle_id}`);
   try {
     if (req.query.result === 'grant_rejected') throw new Error('El miembro rechazó el pago');
     const outgoing = await finishPayment({

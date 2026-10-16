@@ -3,7 +3,7 @@
 //   2) Crear quote en la billetera ORIGEN (el miembro) -> dice cuánto se debita
 //   3) Pedir grant interactivo de outgoing-payment -> redirigir al miembro a autorizar
 //   4) Callback: verificar hash, continuar grant, crear outgoing payment
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   createAuthenticatedClient,
   isPendingGrant,
@@ -14,18 +14,20 @@ import {
 
 let client: AuthenticatedClient | null = null;
 
+// Las billeteras pueden escribirse como $ilp... ; las URL reales son https
+export const toUrl = (w: string) => w.trim().replace(/^\$/, 'https://');
+
 export async function getClient(): Promise<AuthenticatedClient> {
   if (client) return client;
+  const missing = ['WALLET_ADDRESS_URL', 'KEY_ID', 'PRIVATE_KEY_PATH'].filter((k) => !process.env[k]);
+  if (missing.length) throw new Error(`Falta configurar en .env: ${missing.join(', ')}`);
   client = await createAuthenticatedClient({
-    walletAddressUrl: process.env.WALLET_ADDRESS_URL!,
+    walletAddressUrl: toUrl(process.env.WALLET_ADDRESS_URL!),
     privateKey: process.env.PRIVATE_KEY_PATH!,
     keyId: process.env.KEY_ID!,
   });
   return client;
 }
-
-// Las billeteras pueden escribirse como $ilp... ; las URL reales son https
-export const toUrl = (w: string) => w.replace(/^\$/, 'https://');
 
 export interface StartResult {
   redirectUrl: string;
@@ -43,6 +45,7 @@ export interface PendingPayment {
   authServer: string;
   debit: { value: string; assetCode: string; assetScale: number };
   receive: { value: string; assetCode: string; assetScale: number };
+  expiresAt?: string; // la cotización caduca: el miembro debe autorizar antes de esta hora
 }
 
 /** receiveValue: entero en unidades mínimas del activo del destino (ej. 1000 = 10.00 USD si scale=2) */
@@ -76,13 +79,13 @@ export async function startPayment(opts: {
   // 2) quote en la billetera del miembro (fija lo que recibe el círculo)
   const quoteGrant = await c.grant.request(
     { url: sender.authServer },
-    { access_token: { access: [{ type: 'quote', actions: ['create'] }] } },
+    { access_token: { access: [{ type: 'quote', actions: ['create', 'read'] }] } },
   );
   if (!isFinalizedGrantWithAccessToken(quoteGrant)) throw new Error('Grant quote no finalizado');
 
   const quote: Quote = await c.quote.create(
     { url: sender.resourceServer, accessToken: quoteGrant.access_token.value },
-    { walletAddress: sender.id, receiver: incoming.id, method: 'ilp', receiveAmount } as any,
+    { walletAddress: sender.id, receiver: incoming.id, method: 'ilp', receiveAmount },
   );
 
   // 3) grant interactivo para el pago saliente (siempre requiere aprobación del dueño)
@@ -96,7 +99,8 @@ export async function startPayment(opts: {
             identifier: sender.id,
             type: 'outgoing-payment',
             actions: ['create', 'read'],
-            limits: { receiveAmount: quote.receiveAmount },
+            // Igual que el ejemplo oficial: el límite es lo que se debita, que es lo que ve el miembro al autorizar
+            limits: { debitAmount: quote.debitAmount },
           },
         ],
       },
@@ -120,11 +124,17 @@ export async function startPayment(opts: {
       authServer: sender.authServer,
       debit: quote.debitAmount,
       receive: quote.receiveAmount,
+      expiresAt: quote.expiresAt,
     },
   };
 }
 
-/** Verifica que el redirect de vuelta realmente viene del servidor de autorización */
+// La especificación define el hash en Base64 sin relleno; algunas implementaciones usan base64 estándar con "=".
+// Se normaliza todo a base64url sin relleno para comparar sin depender de esa variante.
+const canon = (s: string) => s.replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+
+/** Verifica que el redirect de vuelta realmente viene del servidor de autorización
+ *  hash = SHA-256( clientNonce \n interactNonce \n interactRef \n URL del grant request ) */
 export function verifyHash(p: {
   clientNonce: string;
   interactNonce: string;
@@ -133,8 +143,9 @@ export function verifyHash(p: {
   hash: string;
 }): boolean {
   const data = `${p.clientNonce}\n${p.interactNonce}\n${p.interactRef}\n${p.authServer}`;
-  const expected = createHash('sha256').update(data).digest('base64');
-  return expected === p.hash;
+  const expected = Buffer.from(canon(createHash('sha256').update(data).digest('base64')));
+  const received = Buffer.from(canon(p.hash));
+  return expected.length === received.length && timingSafeEqual(expected, received);
 }
 
 export async function finishPayment(opts: {
@@ -143,14 +154,14 @@ export async function finishPayment(opts: {
   hash: string;
 }) {
   const { state } = opts;
-  // El hash usa la URL del auth server; algunas implementaciones incluyen "/" final, probamos ambas
+  // El hash usa la URL del grant request (la del auth server); no hay consenso sobre el "/" final, probamos ambas
   const base = state.authServer.replace(/\/$/, '');
   const args = { clientNonce: state.nonce, interactNonce: state.interactNonce, interactRef: opts.interactRef, hash: opts.hash };
   const ok = verifyHash({ ...args, authServer: base }) || verifyHash({ ...args, authServer: base + '/' });
   if (!ok) throw new Error('Hash de interacción inválido');
 
   const c = await getClient();
-  const sender = await c.walletAddress.get({ url: state.senderWallet });
+  const sender = await c.walletAddress.get({ url: toUrl(state.senderWallet) });
   const grant = await c.grant.continue(
     { url: state.continueUri, accessToken: state.continueToken },
     { interact_ref: opts.interactRef },
