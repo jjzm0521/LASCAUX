@@ -1,5 +1,7 @@
 # Evidencia de Open Payments — 16 de octubre de 2026
 
+Ensayo posterior, mediciones de tiempos, rechazo real y contrato de errores para la interfaz: [payment-ui-handoff.md](payment-ui-handoff.md). Incluye una nueva captura del aporte completo desde la app.
+
 Ejecuciones reales desde este checkout, sin tokens ni llaves. Se omiten las URL de autorización interactivas (capacidades temporales); el resto de la salida del CLI se reproduce completo. Crear outgoing no acredita por sí solo liquidación final.
 
 ## COP → USD

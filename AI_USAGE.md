@@ -1,4 +1,6 @@
 # Uso de IA
+
+2026-10-16 — Codex (OpenAI), robustez y entrega a UI: traducción de fallos de transporte, prueba offline de fallo y reintento manual sin pending huérfano, medición de dos solicitudes reales, ensayo completo y rechazo real desde la Test Wallet. Se mantuvieron los contratos de startPayment/finishPayment. Evidencia: docs/payment-ui-handoff.md; prompt: prompts/04-robustez-y-ensayo.md.
 Herramienta: Claude (Anthropic). Usada para: ideación del concepto, investigación del contexto colombiano, andamiaje inicial del proyecto (estructura, módulo de Open Payments, API, UI mínima).
 Lo que el equipo debe completar/validar: entender y probar src/openPayments.ts línea por línea, ajustar a la testnet real, decisiones de producto y pitch.
 Prompts reales: carpeta /prompts. (Actualicen este archivo con lo que realmente hagan durante el evento.)

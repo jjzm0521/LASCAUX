@@ -14,6 +14,19 @@ import {
 
 let client: AuthenticatedClient | null = null;
 
+// El SDK guarda el fallo de transporte en description, separado del mensaje genérico.
+// No confundir un rechazo HTTP de autorización con un problema de conexión.
+export function paymentError(error: unknown): Error {
+  if (!error || typeof error !== 'object') return new Error('No pudimos procesar el pago, intenta de nuevo');
+  const e = error as { message?: string; description?: string; name?: string; status?: number; code?: string };
+  const transport = `${e.message ?? ''} ${e.description ?? ''} ${e.name ?? ''} ${e.code ?? ''}`;
+  if ((e.status === undefined && /fetch failed|failed to fetch|network|timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up/i.test(transport)) ||
+      [502, 503, 504].includes(e.status ?? 0)) {
+    return new Error('No pudimos conectar con la billetera de prueba, intenta de nuevo', { cause: error });
+  }
+  return error instanceof Error ? error : new Error('No pudimos procesar el pago, intenta de nuevo');
+}
+
 // Las billeteras pueden escribirse como $ilp... ; las URL reales son https
 export const toUrl = (w: string) => w.trim().replace(/^\$/, 'https://');
 
@@ -52,6 +65,26 @@ export interface PendingPayment {
 export async function startPayment(opts: {
   senderWallet: string;
   receiverWallet: string; // caja del círculo
+  receiveValue: string;
+  finishUri: string;
+}): Promise<StartResult> {
+  const startedAt = performance.now();
+  try {
+    const result = await startPaymentRequest(opts);
+    console.info('[OpenPayments] Solicitud preparada', {
+      durationMs: Math.round(performance.now() - startedAt),
+      quoteRemainingMs: result.state.expiresAt ? Date.parse(result.state.expiresAt) - Date.now() : null,
+    });
+    return result;
+  } catch (error) {
+    throw paymentError(error);
+  }
+}
+
+// No repetir POST automáticamente: una respuesta perdida no demuestra que el recurso no se creó.
+async function startPaymentRequest(opts: {
+  senderWallet: string;
+  receiverWallet: string;
   receiveValue: string;
   finishUri: string;
 }): Promise<StartResult> {
@@ -149,6 +182,18 @@ export function verifyHash(p: {
 }
 
 export async function finishPayment(opts: {
+  state: PendingPayment;
+  interactRef: string;
+  hash: string;
+}) {
+  try {
+    return await finishPaymentRequest(opts);
+  } catch (error) {
+    throw paymentError(error);
+  }
+}
+
+async function finishPaymentRequest(opts: {
   state: PendingPayment;
   interactRef: string;
   hash: string;
