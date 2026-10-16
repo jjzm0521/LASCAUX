@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS contributions (
   member_id INTEGER NOT NULL,
   round INTEGER NOT NULL,
   receive_value TEXT NOT NULL,
+  receive_json TEXT,
   debit_json TEXT,
   status TEXT NOT NULL DEFAULT 'pending',    -- pending | confirmed | failed
   pending_json TEXT,
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS payouts (
   member_id INTEGER NOT NULL,
   round INTEGER NOT NULL,
   amount TEXT NOT NULL,
+  purpose TEXT,                              -- destino o motivo del desembolso solidario (modelo Fomentamos)
   status TEXT NOT NULL DEFAULT 'requested',  -- requested | approved
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -49,9 +51,20 @@ CREATE TABLE IF NOT EXISTS approvals (
 );
 `);
 
+// Migración ligera para bases circulos.db ya creadas antes de agregar columnas nuevas
+const contribCols = db.prepare('PRAGMA table_info(contributions)').all() as { name: string }[];
+if (!contribCols.some((c) => c.name === 'receive_json')) {
+  db.exec('ALTER TABLE contributions ADD COLUMN receive_json TEXT');
+}
+const payoutCols = db.prepare('PRAGMA table_info(payouts)').all() as { name: string }[];
+if (!payoutCols.some((c) => c.name === 'purpose')) {
+  db.exec('ALTER TABLE payouts ADD COLUMN purpose TEXT');
+}
+
 /** Reputación del CÍRCULO (transparente, calculada del libro): % de aportes confirmados vs esperados. */
 export function reputation(circleId: number) {
   const c = db.prepare('SELECT * FROM circles WHERE id=?').get(circleId) as any;
+  if (!c) return { confirmed: 0, expected: 0, score: 0 };
   const members = (db.prepare('SELECT COUNT(*) n FROM members WHERE circle_id=?').get(circleId) as any).n;
   const confirmed = (db.prepare("SELECT COUNT(*) n FROM contributions WHERE circle_id=? AND status='confirmed'").get(circleId) as any).n;
   const expected = members * c.round;
