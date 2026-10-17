@@ -1,0 +1,1 @@
+{"id":2,"circleId":1,"memberId":3,"round":1,"status":"failed","expiresAt":"2026-10-17T00:15:40.885Z","debit":{"value":"3176980","assetCode":"COP","assetScale":2},"receive":{"value":"1000","assetCode":"USD","assetScale":2},"error":"La cotización venció, vuelve a intentar"}
