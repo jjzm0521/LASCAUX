@@ -26,3 +26,7 @@ h1[tabindex="-1"]:focus { outline: none; }
   .cv-barra, .cv-contenido { padding-left: var(--espacio-8); padding-right: var(--espacio-8); }
   .cv-vista { justify-self: start; min-width: 20rem; }
 }
+
+/* Arranque: pantalla completa, sin barra ni aviso de prueba */
+.app--arranque .cv-barra, .app--arranque .app__aviso-prueba { display: none; }
+.app--arranque .cv-splash--pantalla { flex: 1; }
