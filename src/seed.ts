@@ -11,8 +11,13 @@ const walletMama = hasDistinctUsWallet ? process.env.WALLET_US! : walletCo;
 const countryMama = hasDistinctUsWallet ? 'US' : 'CO';
 const assetMama = hasDistinctUsWallet ? 'USD' : 'COP';
 const kind = process.env.CIRCLE_KIND ?? 'natillera';
+const contribution = kind === 'cadena' ? 1000 : null;
 
-const c = db.prepare("INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals) VALUES ('Natillera Familia Medellín',?,?,1000,2)").run(kind, pot);
+const c = db
+  .prepare(
+    "INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals, status, asset_code, asset_scale) VALUES ('Natillera Familia Medellín',?,?,?,2,'open','USD',2)",
+  )
+  .run(kind, pot, contribution);
 const id = Number(c.lastInsertRowid);
 const m = db.prepare('INSERT INTO members (circle_id,name,country,wallet,asset_code,turn) VALUES (?,?,?,?,?,?)');
 m.run(id, 'Mamá', countryMama, walletMama, assetMama, 1);

@@ -57,6 +57,92 @@ function parseAmount(raw: string | null | undefined): AmountInfo | null {
   return null;
 }
 
+// Convierte un monto escrito en decimal ("10.5") a unidades mínimas con BigInt, sin punto flotante
+function decimalToMinorUnits(
+  rawAmount: unknown,
+  assetScale: number,
+  assetCode: string,
+  word: 'aporte' | 'monto' = 'aporte',
+): { value: string } | { error: string } {
+  const text = typeof rawAmount === 'string' ? rawAmount.trim() : String(rawAmount ?? '').trim();
+  if (!text || !/^\d+(\.\d+)?$/.test(text)) {
+    return { error: `El ${word} debe ser un número mayor que cero, por ejemplo 10` };
+  }
+  const [entero, dec = ''] = text.split('.');
+  if (dec.length > assetScale) {
+    return { error: `El ${word} no puede tener más de ${assetScale} decimales en ${assetCode}` };
+  }
+  const minor = BigInt(entero) * 10n ** BigInt(assetScale) + BigInt(dec.padEnd(assetScale, '0') || '0');
+  if (minor <= 0n || minor > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return { error: `El ${word} debe ser un número mayor que cero` };
+  }
+  return { value: minor.toString() };
+}
+
+// Calcula el estado de la caja (pot) y las participaciones (shares) a partir del libro y entregas
+function computePot(circleId: number, rawMembers: any[]) {
+  const confirmedRows = db
+    .prepare("SELECT member_id, receive_value FROM contributions WHERE circle_id=? AND status='confirmed'")
+    .all(circleId) as { member_id: number; receive_value: string }[];
+  const byMember = new Map<number, bigint>();
+  let contributed = 0n;
+  for (const r of confirmedRows) {
+    const v = BigInt(r.receive_value || '0');
+    contributed += v;
+    byMember.set(r.member_id, (byMember.get(r.member_id) ?? 0n) + v);
+  }
+
+  const payoutRows = db
+    .prepare("SELECT amount, status FROM payouts WHERE circle_id=? AND status IN ('paid','approved','paying','processing_payout')")
+    .all(circleId) as { amount: string; status: string }[];
+  let paidOut = 0n;
+  let reserved = 0n;
+  for (const p of payoutRows) {
+    const v = BigInt(p.amount || '0');
+    if (p.status === 'paid') paidOut += v;
+    else reserved += v;
+  }
+
+  const balance = contributed > paidOut ? contributed - paidOut : 0n;
+  const free = balance > reserved ? balance - reserved : 0n;
+
+  const sortedMembers = [...rawMembers].sort((a, b) => {
+    const diff = (byMember.get(b.id) ?? 0n) - (byMember.get(a.id) ?? 0n);
+    return diff > 0n ? 1 : diff < 0n ? -1 : a.turn - b.turn;
+  });
+
+  let sumShares = 0n;
+  const shares = sortedMembers.map((m) => {
+    const mc = byMember.get(m.id) ?? 0n;
+    const percent = contributed > 0n ? Math.round((Number(mc) / Number(contributed)) * 1000) / 10 : 0;
+    const share = contributed > 0n ? (balance * mc) / contributed : 0n;
+    sumShares += share;
+    return {
+      memberId: m.id,
+      name: m.name,
+      contributed: mc.toString(),
+      percent,
+      _shareBig: share,
+      share: share.toString(),
+    };
+  });
+
+  if (contributed > 0n && shares.length > 0 && balance > sumShares) {
+    const rem = balance - sumShares;
+    shares[0]._shareBig += rem;
+    shares[0].share = shares[0]._shareBig.toString();
+  }
+
+  return {
+    contributed: contributed.toString(),
+    paidOut: paidOut.toString(),
+    reserved: reserved.toString(),
+    balance: balance.toString(),
+    free: free.toString(),
+    shares: shares.map(({ _shareBig, ...rest }) => rest),
+  };
+}
+
 // Si el servidor cayó durante un callback en vuelo antes de consumir el grant, recupera a 'pending' los registros con pending_json.
 // Límite: si cae después de consumir grant.continue o de crear el outgoing-payment remoto, el continueToken ya fue usado y no es reintentable.
 db.prepare("UPDATE contributions SET status='pending' WHERE status='processing' AND pending_json IS NOT NULL").run();
@@ -88,19 +174,25 @@ function expirePendingContributions(circleId?: number) {
 
 // Lista de círculos (más reciente primero) para la pantalla "Tus círculos"
 app.get('/api/circles', (_req, res) => {
-  const rows = db.prepare(
-    `SELECT c.id, c.name, c.kind, c.round, c.contribution, c.min_approvals,
-      c.asset_code AS assetCode, c.asset_scale AS assetScale,
-      (SELECT COUNT(*) FROM members m WHERE m.circle_id=c.id) AS members
-     FROM circles c ORDER BY c.id DESC`,
-  ).all();
+  const rows = (
+    db.prepare(
+      `SELECT c.id, c.name, c.kind, c.round, c.contribution, c.min_approvals, c.status,
+        c.asset_code AS assetCode, c.asset_scale AS assetScale,
+        (SELECT COUNT(*) FROM members m WHERE m.circle_id=c.id) AS members
+       FROM circles c ORDER BY c.id DESC`,
+    ).all() as any[]
+  ).map((r) => ({
+    ...r,
+    contribution: r.kind === 'cadena' && r.contribution != null ? String(r.contribution) : null,
+    status: r.status ?? 'open',
+  }));
   res.json({ circles: rows });
 });
 
 const MAX_CIRCLES = 20;
 const KINDS = ['natillera', 'cadena', 'circulo'];
 
-// Crear un círculo: valida la billetera de la caja contra Open Payments y convierte el aporte a unidades mínimas
+// Crear un círculo: valida la billetera de la caja contra Open Payments y convierte el aporte a unidades mínimas (solo obligatorio en cadena)
 app.post('/api/circles', async (req, res) => {
   try {
     const ip = req.ip || req.socket.remoteAddress || 'local';
@@ -126,9 +218,11 @@ app.post('/api/circles', async (req, res) => {
       return res.status(400).json({ error: 'Solo se permiten billeteras de la red de pruebas (.interledger-test.dev)' });
     }
 
-    const amountText = typeof req.body?.amount === 'string' ? req.body.amount.trim() : String(req.body?.amount ?? '');
-    if (!/^\d+(\.\d+)?$/.test(amountText) || Number(amountText) <= 0) {
-      return res.status(400).json({ error: 'El aporte debe ser un número mayor que cero, por ejemplo 10' });
+    const amountText = typeof req.body?.amount === 'string' ? req.body.amount.trim() : String(req.body?.amount ?? '').trim();
+    if (kind === 'cadena') {
+      if (!/^\d+(\.\d+)?$/.test(amountText) || Number(amountText) <= 0) {
+        return res.status(400).json({ error: 'El aporte debe ser un número mayor que cero, por ejemplo 10' });
+      }
     }
 
     if ((db.prepare('SELECT COUNT(*) n FROM circles').get() as any).n >= MAX_CIRCLES) {
@@ -146,25 +240,33 @@ app.post('/api/circles', async (req, res) => {
       return res.status(400).json({ error: 'No encontramos esa billetera. Revisa la dirección.' });
     }
 
-    // Aporte en unidades mínimas del activo de la caja, sin números decimales flotantes
-    const [entero, dec = ''] = amountText.split('.');
-    if (dec.length > wa.assetScale) {
-      return res.status(400).json({ error: `El aporte no puede tener más de ${wa.assetScale} decimales en ${wa.assetCode}` });
-    }
-    const contribution = Number(BigInt(entero) * 10n ** BigInt(wa.assetScale) + BigInt(dec.padEnd(wa.assetScale, '0') || '0'));
-    if (!Number.isSafeInteger(contribution) || contribution <= 0) {
-      return res.status(400).json({ error: 'El aporte es demasiado grande o demasiado pequeño' });
+    let contribution: number | null = null;
+    if (kind === 'cadena') {
+      const parsed = decimalToMinorUnits(amountText, wa.assetScale, wa.assetCode, 'aporte');
+      if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+      contribution = Number(parsed.value);
     }
 
     if ((db.prepare('SELECT COUNT(*) n FROM circles').get() as any).n >= MAX_CIRCLES) {
       return res.status(400).json({ error: 'Ya hay demasiados círculos en este servidor' });
     }
     const ins = db
-      .prepare('INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals, asset_code, asset_scale) VALUES (?,?,?,?,?,?,?)')
+      .prepare("INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals, status, asset_code, asset_scale) VALUES (?,?,?,?,?,'open',?,?)")
       .run(name, kind, wa.id, contribution, minApprovals, wa.assetCode, wa.assetScale);
     const id = Number(ins.lastInsertRowid);
     res.status(201).json({
-      circle: { id, name, kind, round: 1, contribution, min_approvals: minApprovals, pot_wallet: wa.id, assetCode: wa.assetCode, assetScale: wa.assetScale },
+      circle: {
+        id,
+        name,
+        kind,
+        round: 1,
+        status: 'open',
+        contribution: contribution != null ? String(contribution) : null,
+        min_approvals: minApprovals,
+        pot_wallet: wa.id,
+        assetCode: wa.assetCode,
+        assetScale: wa.assetScale,
+      },
     });
   } catch (e: any) {
     console.error(e);
@@ -172,7 +274,7 @@ app.post('/api/circles', async (req, res) => {
   }
 });
 
-// Estado completo del círculo: miembros, libro de aportes, desembolsos, reputación
+// Estado completo del círculo: miembros, caja (pot), libro de aportes, desembolsos, reputación
 app.get('/api/circles/:id', (req, res) => {
   const id = Number(req.params.id);
   const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(id) as any;
@@ -191,9 +293,10 @@ app.get('/api/circles/:id', (req, res) => {
     ).map((r) => r.member_id),
   );
   const hasRoundPayout = Boolean(
-    db.prepare('SELECT id FROM payouts WHERE circle_id=? AND round=?').get(id, circle.round),
+    db.prepare("SELECT id FROM payouts WHERE circle_id=? AND round=? AND kind='entrega' AND status != 'failed'").get(id, circle.round),
   );
 
+  const circleStatus = circle.status ?? 'open';
   const members = rawMembers.map((m) => ({
     id: m.id,
     circle_id: m.circle_id,
@@ -203,7 +306,9 @@ app.get('/api/circles/:id', (req, res) => {
     assetCode: m.asset_code ?? null,
     turn: m.turn,
     hasContributed: activeRoundContribs.has(m.id),
-    canRequestPayout: !hasRoundPayout && (circle.kind === 'circulo' || m.turn === currentTurn),
+    canRequestPayout:
+      circleStatus !== 'closed' &&
+      (circle.kind === 'circulo' ? true : circle.kind === 'cadena' ? !hasRoundPayout && m.turn === currentTurn : false),
   }));
 
   const rawLedger = db.prepare(`SELECT c.id, c.member_id, m.name, m.country, c.round, c.receive_value, c.debit_json, c.receive_json, c.pending_json, c.outgoing_id, c.confirmed_at, c.status, c.created_at
@@ -237,12 +342,56 @@ app.get('/api/circles/:id', (req, res) => {
     (SELECT COUNT(*) FROM approvals a WHERE a.payout_id=p.id) approvals
     FROM payouts p JOIN members m ON m.id=p.member_id WHERE p.circle_id=? ORDER BY p.id DESC`).all(id) as any[];
   const approvalsStmt = db.prepare('SELECT member_id FROM approvals WHERE payout_id=? ORDER BY member_id');
-  const payouts = rawPayouts.map((p) => ({
-    ...p,
-    approvedBy: (approvalsStmt.all(p.id) as { member_id: number }[]).map((a) => a.member_id),
-  }));
+  const payouts = rawPayouts.map((p) => {
+    const debit = parseAmount(p.debit_json);
+    let receive = parseAmount(p.receive_json);
+    if (!receive && p.pending_json) {
+      try {
+        receive = parseAmount(JSON.stringify((JSON.parse(p.pending_json) as PendingPayment).receive));
+      } catch {}
+    }
+    return {
+      id: p.id,
+      member_id: p.member_id,
+      name: p.name,
+      amount: String(p.amount),
+      purpose: p.purpose ?? null,
+      kind: p.kind ?? 'entrega',
+      closingId: p.closing_id ?? null,
+      status: p.status === 'processing_payout' ? 'paying' : p.status,
+      approvals: p.approvals,
+      approvedBy: (approvalsStmt.all(p.id) as { member_id: number }[]).map((a) => a.member_id),
+      round: p.round,
+      outgoingId: p.outgoing_id ?? null,
+      paidAt: p.paid_at ?? null,
+      debit,
+      receive,
+      error: p.error_msg ?? null,
+    };
+  });
 
-  res.json({ circle: { ...circle, currentTurn, assetCode: circle.asset_code ?? null, assetScale: circle.asset_scale ?? null }, members, ledger, payouts, reputation: reputation(id) });
+  const pot = computePot(id, rawMembers);
+
+  res.json({
+    circle: {
+      id: circle.id,
+      name: circle.name,
+      kind: circle.kind,
+      pot_wallet: circle.pot_wallet,
+      contribution: circle.kind === 'cadena' && circle.contribution != null ? String(circle.contribution) : null,
+      min_approvals: circle.min_approvals,
+      round: circle.round,
+      status: circleStatus,
+      currentTurn,
+      assetCode: circle.asset_code ?? null,
+      assetScale: circle.asset_scale ?? null,
+    },
+    pot,
+    members,
+    ledger,
+    payouts,
+    reputation: reputation(id),
+  });
 });
 
 // Alta de miembro con su propia billetera verificada contra Open Payments
@@ -313,7 +462,10 @@ app.post('/api/circles/:id/members', async (req, res) => {
 
     const totalMembers = currentMembers.length + 1;
     const currentTurn = ((circle.round - 1) % totalMembers) + 1;
-    const hasRoundPayout = Boolean(db.prepare('SELECT id FROM payouts WHERE circle_id=? AND round=?').get(circleId, circle.round));
+    const hasRoundPayout = Boolean(
+      db.prepare("SELECT id FROM payouts WHERE circle_id=? AND round=? AND kind='entrega' AND status != 'failed'").get(circleId, circle.round),
+    );
+    const circleStatus = circle.status ?? 'open';
 
     res.status(201).json({
       member: {
@@ -325,7 +477,9 @@ app.post('/api/circles/:id/members', async (req, res) => {
         assetCode,
         turn,
         hasContributed: false,
-        canRequestPayout: !hasRoundPayout && (circle.kind === 'circulo' || turn === currentTurn),
+        canRequestPayout:
+          circleStatus !== 'closed' &&
+          (circle.kind === 'circulo' ? true : circle.kind === 'cadena' ? !hasRoundPayout && turn === currentTurn : false),
       },
     });
   } catch (e: any) {
@@ -377,19 +531,42 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
     const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(circleId) as any;
     const member = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(req.body?.memberId, circleId) as any;
     if (!circle || !member) return res.status(404).json({ error: 'Círculo o miembro no existe' });
+    if ((circle.status ?? 'open') === 'closed') {
+      return res.status(400).json({ error: 'Este círculo ya está cerrado' });
+    }
 
     expirePendingContributions(circleId);
 
-    // Regla: un solo aporte confirmado (o en confirmación activa) por miembro por ronda
-    const activeOrConfirmed = db.prepare(
-      "SELECT status FROM contributions WHERE circle_id=? AND member_id=? AND round=? AND status IN ('confirmed','processing')",
-    ).get(circleId, member.id, circle.round) as any;
-    if (activeOrConfirmed) {
-      return res.status(400).json({
-        error: activeOrConfirmed.status === 'processing'
-          ? 'Tu aporte se está confirmando en este momento'
-          : 'Ya tienes un aporte confirmado en esta ronda',
-      });
+    let receiveValue: string;
+    if (circle.kind === 'cadena') {
+      // En cadena: un solo aporte confirmado (o en confirmación activa) por miembro por ronda, con monto fijo
+      const activeOrConfirmed = db.prepare(
+        "SELECT status FROM contributions WHERE circle_id=? AND member_id=? AND round=? AND status IN ('confirmed','processing')",
+      ).get(circleId, member.id, circle.round) as any;
+      if (activeOrConfirmed) {
+        return res.status(400).json({
+          error: activeOrConfirmed.status === 'processing'
+            ? 'Tu aporte se está confirmando en este momento'
+            : 'Ya tienes un aporte confirmado en esta ronda',
+        });
+      }
+      receiveValue = String(circle.contribution);
+    } else {
+      // En natillera y círculo solidario: amount obligatorio (decimal en texto -> unidades mínimas de la caja)
+      const inFlight = db.prepare(
+        "SELECT status FROM contributions WHERE circle_id=? AND member_id=? AND round=? AND status='processing'",
+      ).get(circleId, member.id, circle.round) as any;
+      if (inFlight) {
+        return res.status(400).json({ error: 'Tu aporte se está confirmando en este momento' });
+      }
+      const parsed = decimalToMinorUnits(
+        req.body?.amount,
+        circle.asset_scale ?? 2,
+        circle.asset_code ?? 'USD',
+        'aporte',
+      );
+      if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+      receiveValue = parsed.value;
     }
 
     // Si el miembro tenía un aporte 'pending' abandonado en la misma ronda, pasa a 'failed' al pedir uno nuevo
@@ -398,14 +575,14 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
     ).run(circleId, member.id, circle.round);
 
     const row = db.prepare('INSERT INTO contributions (circle_id, member_id, round, receive_value) VALUES (?,?,?,?)')
-      .run(circleId, member.id, circle.round, String(circle.contribution));
+      .run(circleId, member.id, circle.round, receiveValue);
     const contributionId = Number(row.lastInsertRowid);
 
     try {
       const { redirectUrl, state } = await startPayment({
         senderWallet: member.wallet,
         receiverWallet: circle.pot_wallet,
-        receiveValue: String(circle.contribution),
+        receiveValue,
         finishUri: `${BASE}/api/contributions/${contributionId}/finish`,
       });
       db.prepare('UPDATE contributions SET pending_json=?, debit_json=?, receive_json=?, expires_at=? WHERE id=?')
@@ -419,8 +596,9 @@ app.post('/api/circles/:id/contribute', async (req, res) => {
       res.json({ contributionId, redirectUrl, debit: state.debit, receive: state.receive, expiresAt: state.expiresAt });
     } catch (e: any) {
       // Si Open Payments falla antes de la autorización, no dejar un aporte "pendiente" colgado en el libro
-      db.prepare("UPDATE contributions SET status='failed', error_msg=? WHERE id=?").run(e?.message ?? 'Error al iniciar el pago', contributionId);
-      throw e;
+      const msg = e?.code === 'network' ? 'No pudimos conectar con la billetera de prueba, intenta de nuevo.' : (e?.message ?? 'Error al iniciar el pago');
+      db.prepare("UPDATE contributions SET status='failed', error_msg=? WHERE id=?").run(msg, contributionId);
+      return res.status(502).json({ error: msg });
     }
   } catch (e: any) {
     console.error(e);
@@ -457,46 +635,104 @@ app.get('/api/contributions/:id/finish', async (req, res) => {
     res.redirect(`/?circle=${row.circle_id}&ok=1`);
   } catch (e: any) {
     console.error(e);
+    const msg = e?.code === 'network' ? 'No pudimos conectar con la billetera de prueba, intenta de nuevo.' : (e?.message ?? 'Error al confirmar el aporte');
     db.prepare(
       "UPDATE contributions SET status='failed', pending_json=NULL, error_msg=? WHERE id=? AND status='processing'",
-    ).run(e?.message ?? 'Error al confirmar el aporte', id);
-    res.redirect(`/?circle=${row.circle_id}&error=${encodeURIComponent(e.message)}`);
+    ).run(msg, id);
+    res.redirect(`/?circle=${row.circle_id}&error=${encodeURIComponent(msg)}`);
   }
 });
 
-// 3) Desembolso: en 'cadena'/'natillera' respeta el turno de la ronda; en 'circulo' (modelo Corporación Fomentamos)
-//    cualquier miembro puede solicitar un desembolso/crédito solidario respaldado por M aprobaciones del grupo.
+// Abrir la ronda siguiente manualmente (natillera y círculo solidario; en cadena cambia sola al pagarse la entrega)
+app.post('/api/circles/:id/rounds/next', (req, res) => {
+  const circleId = Number(req.params.id);
+  const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(circleId) as any;
+  if (!circle) return res.status(404).json({ error: 'Círculo no existe' });
+  if ((circle.status ?? 'open') === 'closed') {
+    return res.status(400).json({ error: 'Este círculo ya está cerrado' });
+  }
+  if (circle.kind === 'cadena') {
+    return res.status(400).json({ error: 'En una cadena la ronda cambia sola al pagar la entrega' });
+  }
+  const member = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(req.body?.memberId, circleId) as any;
+  if (!member) return res.status(404).json({ error: 'Miembro no pertenece al círculo' });
+
+  const round = circle.round + 1;
+  db.prepare('UPDATE circles SET round=? WHERE id=?').run(round, circleId);
+  res.json({ round });
+});
+
+// 3) Solicitud de entrega (payout kind='entrega') según reglas de cada tipo de círculo
 app.post('/api/circles/:id/payouts', (req, res) => {
   const circleId = Number(req.params.id);
   const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(circleId) as any;
   if (!circle) return res.status(404).json({ error: 'Círculo no existe' });
+  if ((circle.status ?? 'open') === 'closed') {
+    return res.status(400).json({ error: 'Este círculo ya está cerrado' });
+  }
+
+  if (circle.kind === 'natillera') {
+    return res.status(400).json({ error: 'En una natillera la caja se reparte al cierre' });
+  }
 
   const member = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(req.body?.memberId, circleId) as any;
   if (!member) return res.status(404).json({ error: 'Miembro no pertenece al círculo' });
 
-  const members = (db.prepare('SELECT COUNT(*) n FROM members WHERE circle_id=?').get(circleId) as any).n;
-  if (!members) return res.status(400).json({ error: 'El círculo no tiene miembros' });
+  const rawMembers = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(circleId) as any[];
+  const membersCount = rawMembers.length;
+  if (!membersCount) return res.status(400).json({ error: 'El círculo no tiene miembros' });
 
-  const existing = db.prepare('SELECT id FROM payouts WHERE circle_id=? AND round=?').get(circleId, circle.round);
-  if (existing) {
-    return res.status(400).json({ error: `Ya existe un desembolso registrado en la ronda ${circle.round}` });
-  }
+  const pot = computePot(circleId, rawMembers);
+  let amount: string;
 
-  if (circle.kind !== 'circulo') {
-    const expectedTurn = ((circle.round - 1) % members) + 1;
+  if (circle.kind === 'cadena') {
+    const expectedTurn = ((circle.round - 1) % membersCount) + 1;
     if (member.turn !== expectedTurn) {
-      return res.status(400).json({ error: `En la ronda ${circle.round} el turno de desembolso corresponde al turno ${expectedTurn}` });
+      return res.status(400).json({ error: `En la ronda ${circle.round} el turno de entrega corresponde al turno ${expectedTurn}` });
     }
+    const existing = db
+      .prepare("SELECT id FROM payouts WHERE circle_id=? AND round=? AND kind='entrega' AND status != 'failed'")
+      .get(circleId, circle.round);
+    if (existing) {
+      return res.status(400).json({ error: `Ya existe una entrega activa en la ronda ${circle.round}` });
+    }
+    const confirmedMembers = (
+      db.prepare(
+        "SELECT COUNT(DISTINCT member_id) n FROM contributions WHERE circle_id=? AND round=? AND status='confirmed'",
+      ).get(circleId, circle.round) as any
+    ).n;
+    if (confirmedMembers < membersCount) {
+      return res.status(400).json({ error: 'Faltan aportes de esta ronda: todavía no se puede entregar.' });
+    }
+    const roundRows = db
+      .prepare("SELECT receive_value FROM contributions WHERE circle_id=? AND round=? AND status='confirmed'")
+      .all(circleId, circle.round) as { receive_value: string }[];
+    const roundSum = roundRows.reduce((acc, r) => acc + BigInt(r.receive_value || '0'), 0n);
+    if (roundSum <= 0n || roundSum > BigInt(pot.free)) {
+      return res.status(400).json({ error: 'La caja no tiene saldo suficiente para esta entrega.' });
+    }
+    amount = roundSum.toString();
+  } else {
+    // circulo solidario: cualquier miembro, amount obligatorio y <= pot.free
+    const parsed = decimalToMinorUnits(
+      req.body?.amount,
+      circle.asset_scale ?? 2,
+      circle.asset_code ?? 'USD',
+      'monto',
+    );
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+    if (BigInt(parsed.value) > BigInt(pot.free)) {
+      return res.status(400).json({ error: 'La caja no tiene saldo suficiente para esta entrega.' });
+    }
+    amount = parsed.value;
   }
 
-  const defaultAmount = String(circle.contribution * members);
-  const customAmount = req.body?.amount !== undefined ? String(Math.trunc(Number(req.body.amount))) : null;
-  const amount = customAmount && Number(customAmount) > 0 ? customAmount : defaultAmount;
   const purpose = typeof req.body?.purpose === 'string' && req.body.purpose.trim() ? req.body.purpose.trim() : null;
 
-  const r = db.prepare('INSERT INTO payouts (circle_id, member_id, round, amount, purpose) VALUES (?,?,?,?,?)')
+  const r = db
+    .prepare("INSERT INTO payouts (circle_id, member_id, round, amount, purpose, kind, status) VALUES (?,?,?,?,?,'entrega','requested')")
     .run(circleId, member.id, circle.round, amount, purpose);
-  res.json({ payoutId: Number(r.lastInsertRowid), amount, purpose, round: circle.round });
+  res.json({ payoutId: Number(r.lastInsertRowid), amount, purpose, kind: 'entrega', status: 'requested', round: circle.round });
 });
 
 app.post('/api/payouts/:id/approve', (req, res) => {
@@ -517,18 +753,12 @@ app.post('/api/payouts/:id/approve', (req, res) => {
   db.prepare('INSERT OR IGNORE INTO approvals (payout_id, member_id) VALUES (?,?)').run(id, approver.id);
   const n = (db.prepare('SELECT COUNT(*) n FROM approvals WHERE payout_id=?').get(id) as any).n;
 
-  let status = payout.status;
-  let round = circle.round;
-  if (n >= circle.min_approvals && payout.status !== 'approved') {
+  let status = payout.status === 'processing_payout' ? 'paying' : payout.status;
+  if (n >= circle.min_approvals && payout.status === 'requested') {
     status = 'approved';
-    db.prepare("UPDATE payouts SET status='approved' WHERE id=?").run(id);
-    // Cierre de ronda al alcanzar las M aprobaciones solidarias
-    if (circle.round === payout.round) {
-      round = circle.round + 1;
-      db.prepare('UPDATE circles SET round=? WHERE id=?').run(round, circle.id);
-    }
+    db.prepare("UPDATE payouts SET status='approved' WHERE id=? AND status='requested'").run(id);
   }
-  res.json({ approvals: n, needed: circle.min_approvals, status, round });
+  res.json({ approvals: n, needed: circle.min_approvals, status, round: circle.round });
 });
 
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Círculos en ${BASE}`));
