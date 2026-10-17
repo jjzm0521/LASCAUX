@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { db, reputation } from './db.js';
-import { startPayment, finishPayment, toUrl, getClient, type PendingPayment } from './openPayments.js';
+import { startPayment, startPayout, finishPayment, toUrl, getClient, type PendingPayment } from './openPayments.js';
 
 const app = express();
 app.use(express.json());
@@ -79,6 +79,20 @@ function decimalToMinorUnits(
   return { value: minor.toString() };
 }
 
+// Mensajes en español exactos de la sección 5 del Contrato v2 según código de error de Open Payments
+function formatPayoutError(e: any): string {
+  if (e?.code === 'expired' || /cotización venció/i.test(e?.message ?? '')) {
+    return 'La cotización venció, vuelve a intentar.';
+  }
+  if (e?.code === 'rejected') {
+    return 'La billetera de la caja rechazó el pago.';
+  }
+  if (e?.code === 'network') {
+    return 'No pudimos conectar con la billetera de prueba, intenta de nuevo.';
+  }
+  return e?.message ?? 'No pudimos procesar el pago, intenta de nuevo.';
+}
+
 // Calcula el estado de la caja (pot) y las participaciones (shares) a partir del libro y entregas
 function computePot(circleId: number, rawMembers: any[]) {
   const confirmedRows = db
@@ -143,9 +157,10 @@ function computePot(circleId: number, rawMembers: any[]) {
   };
 }
 
-// Si el servidor cayó durante un callback en vuelo antes de consumir el grant, recupera a 'pending' los registros con pending_json.
+// Si el servidor cayó durante un callback en vuelo antes de consumir el grant, recupera a 'pending'/'paying' los registros con pending_json.
 // Límite: si cae después de consumir grant.continue o de crear el outgoing-payment remoto, el continueToken ya fue usado y no es reintentable.
 db.prepare("UPDATE contributions SET status='pending' WHERE status='processing' AND pending_json IS NOT NULL").run();
+db.prepare("UPDATE payouts SET status='paying' WHERE status='processing_payout' AND pending_json IS NOT NULL").run();
 
 // Pasa a 'failed' los aportes 'pending' cuya cotización (pending_json.expiresAt) ya venció
 function expirePendingContributions(circleId?: number) {
@@ -155,6 +170,31 @@ function expirePendingContributions(circleId?: number) {
   const now = Date.now();
   const markFailed = db.prepare(
     "UPDATE contributions SET status='failed', error_msg=COALESCE(error_msg, 'La cotización venció, vuelve a intentar') WHERE id=? AND status='pending'",
+  );
+  for (const r of rows) {
+    let exp = r.expires_at as string | undefined;
+    if (!exp && r.pending_json) {
+      try {
+        exp = (JSON.parse(r.pending_json) as PendingPayment).expiresAt;
+      } catch {
+        markFailed.run(r.id);
+        continue;
+      }
+    }
+    if (exp && now >= Date.parse(exp)) {
+      markFailed.run(r.id);
+    }
+  }
+}
+
+// Pasa a 'failed' las entregas 'paying' cuya cotización ya venció (se pueden reejecutar volviendo a 'approved')
+function expirePayingPayouts(circleId?: number) {
+  const rows = (circleId !== undefined
+    ? db.prepare("SELECT id, pending_json, expires_at FROM payouts WHERE circle_id=? AND status='paying'").all(circleId)
+    : db.prepare("SELECT id, pending_json, expires_at FROM payouts WHERE status='paying'").all()) as any[];
+  const now = Date.now();
+  const markFailed = db.prepare(
+    "UPDATE payouts SET status='failed', error_msg='La cotización venció, vuelve a intentar.' WHERE id=? AND status='paying'",
   );
   for (const r of rows) {
     let exp = r.expires_at as string | undefined;
@@ -281,6 +321,7 @@ app.get('/api/circles/:id', (req, res) => {
   if (!circle) return res.status(404).json({ error: 'No existe' });
 
   expirePendingContributions(id);
+  expirePayingPayouts(id);
 
   const rawMembers = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(id) as any[];
   const currentTurn = rawMembers.length ? ((circle.round - 1) % rawMembers.length) + 1 : 1;
@@ -682,6 +723,9 @@ app.post('/api/circles/:id/payouts', (req, res) => {
   const membersCount = rawMembers.length;
   if (!membersCount) return res.status(400).json({ error: 'El círculo no tiene miembros' });
 
+  expirePendingContributions(circleId);
+  expirePayingPayouts(circleId);
+
   const pot = computePot(circleId, rawMembers);
   let amount: string;
 
@@ -759,6 +803,190 @@ app.post('/api/payouts/:id/approve', (req, res) => {
     db.prepare("UPDATE payouts SET status='approved' WHERE id=? AND status='requested'").run(id);
   }
   res.json({ approvals: n, needed: circle.min_approvals, status, round: circle.round });
+});
+
+// Estado individual de una entrega para el stepper y el comprobante
+app.get('/api/payouts/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const initial = db.prepare('SELECT circle_id FROM payouts WHERE id=?').get(id) as { circle_id: number } | undefined;
+  if (!initial) return res.status(404).json({ error: 'Entrega no encontrada' });
+
+  expirePayingPayouts(initial.circle_id);
+
+  const row = db.prepare('SELECT * FROM payouts WHERE id=?').get(id) as any;
+  const debit = parseAmount(row.debit_json);
+  let receive = parseAmount(row.receive_json);
+  let expiresAt: string | null = row.expires_at ?? null;
+  if (row.pending_json) {
+    try {
+      const state = JSON.parse(row.pending_json) as PendingPayment;
+      if (!receive) receive = parseAmount(JSON.stringify(state.receive));
+      if (!expiresAt && state.expiresAt) expiresAt = state.expiresAt;
+    } catch {}
+  }
+
+  const out: Record<string, any> = {
+    id: row.id,
+    circleId: row.circle_id,
+    memberId: row.member_id,
+    round: row.round,
+    kind: row.kind ?? 'entrega',
+    closingId: row.closing_id ?? null,
+    amount: String(row.amount),
+    status: row.status === 'processing_payout' ? 'paying' : row.status,
+    expiresAt,
+    debit,
+    receive,
+    outgoingId: row.outgoing_id ?? null,
+    paidAt: row.paid_at ?? null,
+  };
+  if (row.error_msg) out.error = row.error_msg;
+  res.json(out);
+});
+
+// 4) Ejecutar entrega aprobada -> prepara cotización por debitAmount desde la billetera de la caja hacia el miembro
+app.post('/api/payouts/:id/execute', async (req, res) => {
+  try {
+    const ip = req.ip || req.socket.remoteAddress || 'local';
+    if (!checkMemberRateLimit('payout:' + ip)) {
+      return res.status(429).json({ error: 'Demasiados intentos seguidos. Espera un minuto e intenta de nuevo.' });
+    }
+
+    const id = Number(req.params.id);
+    const initial = db.prepare('SELECT * FROM payouts WHERE id=?').get(id) as any;
+    if (!initial) return res.status(404).json({ error: 'Entrega no encontrada' });
+
+    const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(initial.circle_id) as any;
+    if (!circle) return res.status(404).json({ error: 'Círculo no existe' });
+    if ((circle.status ?? 'open') === 'closed') {
+      return res.status(400).json({ error: 'Este círculo ya está cerrado' });
+    }
+
+    if (req.body?.memberId !== undefined) {
+      const executor = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(req.body.memberId, circle.id) as any;
+      if (!executor) return res.status(404).json({ error: 'Miembro no pertenece al círculo' });
+    }
+
+    expirePayingPayouts(circle.id);
+
+    let payout = db.prepare('SELECT * FROM payouts WHERE id=?').get(id) as any;
+    // Las entregas 'failed' por vencimiento (o fallo previo a crear el pago) vuelven a 'approved' al pedir execute de nuevo
+    if (payout.status === 'failed' && !payout.outgoing_id) {
+      db.prepare("UPDATE payouts SET status='approved', error_msg=NULL, pending_json=NULL, expires_at=NULL WHERE id=? AND status='failed'").run(id);
+      payout = db.prepare('SELECT * FROM payouts WHERE id=?').get(id) as any;
+    }
+
+    if (payout.status !== 'approved') {
+      return res.status(400).json({
+        error:
+          payout.status === 'paying' || payout.status === 'processing_payout'
+            ? 'Esta entrega ya está en proceso de pago'
+            : payout.status === 'paid'
+              ? 'Esta entrega ya fue pagada'
+              : 'Solo se pueden ejecutar entregas aprobadas',
+      });
+    }
+
+    const activePaying = db
+      .prepare("SELECT id FROM payouts WHERE circle_id=? AND status IN ('paying','processing_payout')")
+      .get(circle.id) as any;
+    if (activePaying) {
+      return res.status(400).json({ error: 'Ya hay una entrega en proceso de pago en este círculo' });
+    }
+
+    const recipient = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(payout.member_id, circle.id) as any;
+    if (!recipient) return res.status(404).json({ error: 'Miembro destinatario no existe' });
+
+    const rawMembers = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(circle.id) as any[];
+    const pot = computePot(circle.id, rawMembers);
+    // payout está en 'approved', por lo que su monto ya está incluido en pot.reserved
+    const availableForThisPayout = BigInt(pot.free) + BigInt(payout.amount);
+    if (BigInt(payout.amount) > BigInt(pot.balance) || BigInt(payout.amount) > availableForThisPayout) {
+      return res.status(400).json({ error: 'La caja no tiene saldo suficiente para esta entrega.' });
+    }
+
+    // Reserva atómica antes del await: una sola entrega en 'paying' por círculo
+    const claim = db
+      .prepare(
+        "UPDATE payouts SET status='paying', error_msg=NULL WHERE id=? AND status='approved' AND NOT EXISTS (SELECT 1 FROM payouts WHERE circle_id=? AND id != ? AND status IN ('paying','processing_payout'))",
+      )
+      .run(id, circle.id, id);
+    if (claim.changes === 0) {
+      return res.status(400).json({ error: 'Ya hay una entrega en proceso de pago en este círculo' });
+    }
+
+    try {
+      const { redirectUrl, state } = await startPayout({
+        potWallet: circle.pot_wallet,
+        memberWallet: recipient.wallet,
+        debitValue: String(payout.amount),
+        finishUri: `${BASE}/api/payouts/${id}/finish`,
+      });
+      db.prepare('UPDATE payouts SET pending_json=?, debit_json=?, receive_json=?, expires_at=?, error_msg=NULL WHERE id=?').run(
+        JSON.stringify(state),
+        JSON.stringify(state.debit),
+        JSON.stringify(state.receive),
+        state.expiresAt ?? null,
+        id,
+      );
+      res.json({ redirectUrl, debit: state.debit, receive: state.receive, expiresAt: state.expiresAt });
+    } catch (e: any) {
+      const msg = formatPayoutError(e);
+      db.prepare("UPDATE payouts SET status='failed', pending_json=NULL, error_msg=? WHERE id=?").run(msg, id);
+      return res.status(502).json({ error: msg });
+    }
+  } catch (e: any) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 5) Callback de autorización de la billetera de la caja para la entrega
+app.get('/api/payouts/:id/finish', async (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM payouts WHERE id=?').get(id) as any;
+  if (!row) return res.status(404).send('Entrega no encontrada');
+  if (!row.pending_json || row.status === 'paid' || row.status === 'processing_payout') {
+    return res.redirect(`/?circle=${row.circle_id}`);
+  }
+
+  // Reserva atómica antes del primer await conservando pending_json
+  const claim = db
+    .prepare("UPDATE payouts SET status='processing_payout' WHERE id=? AND pending_json IS NOT NULL AND status IN ('paying','failed')")
+    .run(id);
+  if (claim.changes === 0) return res.redirect(`/?circle=${row.circle_id}`);
+
+  try {
+    if (req.query.result === 'grant_rejected') {
+      throw { code: 'rejected', message: 'La billetera de la caja rechazó el pago.' };
+    }
+    const outgoing = await finishPayment({
+      state: JSON.parse(row.pending_json) as PendingPayment,
+      interactRef: String(req.query.interact_ref),
+      hash: String(req.query.hash),
+    });
+    const upd = db
+      .prepare(
+        "UPDATE payouts SET status='paid', outgoing_id=?, paid_at=datetime('now'), pending_json=NULL, error_msg=NULL WHERE id=? AND status='processing_payout'",
+      )
+      .run(outgoing.id, id);
+
+    if (upd.changes > 0) {
+      const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(row.circle_id) as any;
+      if (circle && circle.kind === 'cadena') {
+        db.prepare('UPDATE circles SET round = round + 1 WHERE id=?').run(circle.id);
+      }
+    }
+    res.redirect(`/?circle=${row.circle_id}&payout=ok&p=${id}`);
+  } catch (e: any) {
+    console.error(e);
+    const msg = formatPayoutError(e);
+    db.prepare("UPDATE payouts SET status='failed', pending_json=NULL, error_msg=? WHERE id=? AND status='processing_payout'").run(
+      msg,
+      id,
+    );
+    res.redirect(`/?circle=${row.circle_id}&payout=error&p=${id}&error=${encodeURIComponent(msg)}`);
+  }
 });
 
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Círculos en ${BASE}`));
