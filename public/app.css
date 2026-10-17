@@ -42,3 +42,19 @@ button.cv-fila { width: 100%; border: 0; border-bottom: var(--borde-fino) solid 
   .app, .app__estrecho { max-width: none; }
   body { background: #fff; }
 }
+
+/* Pestañas inferiores: en móvil muestran una sección a la vez; en escritorio todo va junto y la barra se oculta */
+.app .cv-nav { position: sticky; bottom: 0; z-index: var(--z-barra); }
+.cv-nav--cuatro { grid-template-columns: repeat(4, 1fr); }
+.app__punto { display: inline-flex; align-items: center; justify-content: center; min-width: 1.25rem; height: 1.25rem; padding: 0 var(--espacio-1); border-radius: var(--radio-pill); background: var(--color-acento); color: var(--color-sobre-acento); font-size: var(--tamano-nota); font-weight: var(--peso-negrita); line-height: 1; }
+@media (max-width: 61.99rem) {
+  [data-tab="inicio"] [data-seccion]:not([data-seccion="inicio"]),
+  [data-tab="libro"] [data-seccion]:not([data-seccion="libro"]),
+  [data-tab="miembros"] [data-seccion]:not([data-seccion="miembros"]),
+  [data-tab="entregas"] [data-seccion]:not([data-seccion="entregas"]) { display: none !important; }
+}
+@media (min-width: 62rem) { .app .cv-nav { display: none; } }
+
+/* La barra inferior queda pegada al borde de la pantalla aunque haya poco contenido */
+#vista { flex: 1; display: flex; flex-direction: column; }
+#vista > main { flex: 1; align-content: start; }
