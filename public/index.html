@@ -118,6 +118,17 @@ function yo() {
   var id = Number(leer('convite.yo.' + circleId));
   return ms.find(function (m) { return m.id === id; }) || ms[0] || null;
 }
+// Aprobaciones necesarias: las congela el backend en cada entrega (needed); si no vienen, se calculan con la proporción del círculo
+function aprobNecesarias(d, p) {
+  if (p && p.needed != null) return p.needed;
+  var c = d.circle, pct = c.approvalPercent != null ? c.approvalPercent : c.approval_percent;
+  if (pct) {
+    var votantes = Math.max(1, d.members.length - (p && p.member_id ? 1 : 0)); // quien recibe no vota
+    return Math.min(votantes, Math.max(1, Math.ceil(pct * votantes / 100 - 1e-9)));
+  }
+  return c.min_approvals;
+}
+function textoProporcion(pct) { return pct >= 100 ? 'todo el grupo' : pct > 50 && pct < 67 ? 'la mayoría del grupo' : pct === 50 ? 'la mitad del grupo' : pct + ' % del grupo'; }
 function tieneIdentidad() { var id = Number(leer('convite.yo.' + circleId)); return !!(S.data && S.data.members.some(function (m) { return m.id === id; })); }
 function destinoInicial() { return S.data && S.data.members.length && !tieneIdentidad() ? 'quien' : 'inicio'; }
 function activoPote() { // moneda de la caja: la trae el círculo o sale del libro (receive); si no hay ninguna, no se inventa
@@ -183,7 +194,7 @@ function chipMiembro(m) {
 function sec(n, html) { return '<div data-seccion="' + n + '" style="display:contents">' + html + '</div>'; }
 // Navegación inferior (solo móvil; en escritorio todo se ve junto)
 function navInferior(d, me) {
-  var porAprobar = d.payouts.filter(function (p) { return p.status !== 'approved' && p.approvedBy.length < d.circle.min_approvals && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0; }).length;
+  var porAprobar = d.payouts.filter(function (p) { return p.status !== 'approved' && p.approvedBy.length < aprobNecesarias(d, p) && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0; }).length;
   var items = [['inicio', 'Inicio', 'casa'], ['libro', 'Libro', 'libro'], ['miembros', 'Miembros', 'personas'], ['entregas', 'Entregas', 'entregas'], ['cuenta', 'Cuenta', 'cuenta']];
   return '<nav class="cv-nav" aria-label="Principal">' + items.map(function (it) {
     return '<button type="button" class="cv-nav__item" data-accion="tab" data-tab="' + it[0] + '"' + (S.tab === it[0] ? ' aria-current="page"' : '') + '>' + ico(it[2]) +
@@ -268,6 +279,7 @@ function vPartes(d, me, pote) {
 function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
   var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
+  var pctAprob = c.approvalPercent != null ? c.approvalPercent : c.approval_percent;
   var cuenta = vCuenta(d, me, pote) + (c.kind === 'natillera' ? vPartes(d, me, pote) : '');
   var caja = vCaja(d, pote);
   var agregarPersonas = '<section class="cv-tarjeta" aria-labelledby="t-agr"><h2 id="t-agr" class="cv-tarjeta__titulo">¿Eres nueva persona?</h2><p class="cv-tarjeta__cuerpo" style="margin:6px 0 14px">Crea tu usuario con tu billetera de prueba para aportar desde la tuya.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear mi usuario</button></section>';
@@ -323,9 +335,9 @@ function vInicio() {
     : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes</h3><p class="cv-vacio__texto">Cuando alguien pague, aparecerá aquí y todos lo podrán ver.</p></div></div>') + '</section>';
 
   var potMonto = function (amt) { return pote ? fmtMonto({ value: amt, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null; };
-  var entregas = '<section class="cv-seccion" aria-labelledby="s-ent"><div class="cv-seccion__cabecera"><h2 id="s-ent" class="cv-seccion__titulo">Entregas de la caja</h2></div>' +
+  var entregas = '<section class="cv-seccion" aria-labelledby="s-ent"><div class="cv-seccion__cabecera"><h2 id="s-ent" class="cv-seccion__titulo">Entregas de la caja</h2></div>' + (pctAprob ? '<p class="cv-nota cv-texto-suave">Cada entrega necesita la aprobación de ' + textoProporcion(pctAprob) + '. Quien la recibe no vota.</p>' : '') +
     d.payouts.map(function (p) {
-      var necesarias = c.min_approvals, hechas = p.approvedBy.length, lista = p.status === 'approved' || hechas >= necesarias;
+      var necesarias = aprobNecesarias(d, p), hechas = p.approvedBy.length, lista = p.status === 'approved' || hechas >= necesarias;
       var nombres = p.approvedBy.map(function (id) { var m = d.members.find(function (x) { return x.id === id; }); return m ? m.name.split(' ')[0] : ''; }).filter(Boolean);
       var detalle = lista ? 'La entrega está aprobada.' : hechas ? 'Aprobó ' + nombres.join(' y ') + '. Faltan ' + (necesarias - hechas) + '.' : 'Todavía nadie ha aprobado esta entrega.';
       var tramos = ''; for (var i = 0; i < necesarias; i++) tramos += '<span class="cv-progreso__tramo' + (i < hechas ? ' is-lleno' : '') + '"></span>';
@@ -339,7 +351,7 @@ function vInicio() {
         (puede ? '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="aprobar" data-id="' + p.id + '">' + ico('check', 'cv-icono--sm') + 'Aprobar esta entrega</button>' : '') + '</section>';
     }).join('') +
     (me.canRequestPayout ? '<div class="cv-tarjeta">' + (c.kind === 'circulo' ? '<div class="cv-campo"><label class="cv-campo__etiqueta" for="motivo">¿Para qué es la entrega? (opcional)</label><div class="cv-campo__control"><input class="cv-campo__entrada" id="motivo" type="text" maxlength="80" autocomplete="off"></div></div>' : '') +
-      '<p class="cv-texto-suave" style="margin-bottom:12px">Te toca pedir la entrega de la ronda ' + c.round + '. Necesita ' + c.min_approvals + ' aprobaciones de tu círculo.</p>' +
+      '<p class="cv-texto-suave" style="margin-bottom:12px">Te toca pedir la entrega de la ronda ' + c.round + '. Necesita ' + aprobNecesarias(d, { member_id: me.id }) + (aprobNecesarias(d, { member_id: me.id }) === 1 ? ' aprobación' : ' aprobaciones') + ' de tu círculo.</p>' +
       '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="pedir-entrega">Pedir la entrega de la caja</button></div>' : '') +
     (!d.payouts.length && !me.canRequestPayout ? '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay entregas</h3><p class="cv-vacio__texto">Cuando a alguien le toque, podrá pedirla y el círculo la aprobará aquí.</p></div></div>' : '') +
     '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
@@ -509,7 +521,7 @@ function campoHtml(id, etiqueta, ayuda, valor, extra, err) {
     (err ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(err) + '</span></p>' : '') + '</div>';
 }
 function vCrear() {
-  var f = S.formC || { tipo: 'natillera', aprob: '2' }, err = S.formCError || {};
+  var f = S.formC || { tipo: 'natillera', aprob: '50' }, err = S.formCError || {};
   var tipos = '<fieldset class="cv-tipos"><legend class="cv-tipos__leyenda">Tipo de círculo</legend>' + TIPOS.map(function (t) {
     return '<label class="cv-tipo"><input type="radio" class="cv-tipo__radio" name="c-tipo" value="' + t[0] + '"' + (f.tipo === t[0] ? ' checked' : '') + '><span class="cv-tipo__icono">' + ico(t[0] === 'cadena' ? 't_cadena' : t[0] === 'natillera' ? 't_natillera' : 't_circulo') + '</span>' +
       '<span class="cv-tipo__cuerpo"><span class="cv-tipo__nombre">' + esc(t[1]) + '<span class="cv-tipo__elegido">' + ico('check', 'cv-icono--xs') + 'Elegido</span></span><span class="cv-tipo__frase">' + esc(t[2]) + '</span>' +
@@ -526,7 +538,7 @@ function vCrear() {
     campoHtml('c-nombre', 'Nombre del círculo', 'Así lo verán todos los miembros. Por ejemplo: Los Vecinos.', f.nombre, 'maxlength="60"', err.nombre) + tipos +
     campoHtml('c-billetera', 'Billetera de la caja', 'Es la billetera de prueba que recibe los aportes. Por ejemplo: $ilp.interledger-test.dev/caja-familia', f.billetera, 'inputmode="url"', err.billetera) +
     (pideMonto ? campoHtml('c-monto', 'Aporte por ronda', ayudaMonto, f.monto, 'inputmode="decimal"', err.monto) : '') +
-    sel('c-aprob', 'Aprobaciones para entregar la caja', 'Cuántas personas deben aprobar cada entrega.', [['1', '1 aprobación'], ['2', '2 aprobaciones'], ['3', '3 aprobaciones'], ['4', '4 aprobaciones']], f.aprob) +
+    sel('c-aprob', '¿Qué parte del grupo debe aprobar una entrega?', 'Quien recibe no vota. Por ejemplo: con 4 personas y la mitad, cada entrega necesita 2 aprobaciones.', [['50', 'La mitad del grupo (50 %)'], ['51', 'La mayoría (más de la mitad)'], ['67', 'Dos tercios (67 %)'], ['100', 'Todo el grupo (100 %)']], f.aprob) +
     (err.general ? '<p class="cv-campo__error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(err.general) + '</span></p>' : '') +
     '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (S.ocupado ? CARGADOR + 'Revisando la billetera…' : ico('mas', 'cv-icono--sm') + 'Crear círculo') + '</button>' +
     '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="circulos">Cancelar</button></div></form></main>';
@@ -545,7 +557,7 @@ function guardarCirculo(e) {
   var primero = ['nombre', 'billetera', 'monto'].find(function (k) { return err[k]; });
   if (primero) { render(false); var el = $({ nombre: 'c-nombre', billetera: 'c-billetera', monto: 'c-monto' }[primero]); if (el) el.focus(); return; }
   S.ocupado = true; render(false);
-  post('/api/circles', Object.assign({ name: f.nombre, kind: f.tipo, pot_wallet: f.billetera, min_approvals: Number(f.aprob) }, campoMonto ? { amount: f.monto } : {})).then(function (r) {
+  post('/api/circles', Object.assign({ name: f.nombre, kind: f.tipo, pot_wallet: f.billetera, approval_percent: Number(f.aprob), min_approvals: 2 }, campoMonto ? { amount: f.monto } : {})).then(function (r) {
     var c = r.circle || r; S.ocupado = false; S.formC = null; S.formCError = null;
     location.assign('/?circle=' + encodeURIComponent(c.id));
   }).catch(function (er) {
@@ -660,7 +672,7 @@ function confirmar(o) {
 }
 function aprobar(id) {
   var p = S.data.payouts.find(function (x) { return x.id === Number(id); }); if (!p) return;
-  confirmar({ titulo: '¿Aprobar esta entrega?', texto: 'La entrega a ' + p.name + ' ' + (p.approvedBy.length + 1 >= S.data.circle.min_approvals ? 'quedará aprobada con tu voto.' : 'sumará tu aprobación.'), si: 'Sí, aprobar', no: 'Todavía no' }).then(function (si) {
+  confirmar({ titulo: '¿Aprobar esta entrega?', texto: 'La entrega a ' + p.name + ' ' + (p.approvedBy.length + 1 >= aprobNecesarias(S.data, p) ? 'quedará aprobada con tu voto.' : 'sumará tu aprobación.'), si: 'Sí, aprobar', no: 'Todavía no' }).then(function (si) {
     if (!si) return;
     post('/api/payouts/' + id + '/approve', { memberId: S.me.id }).then(function (r) {
       aviso('exito', r.status === 'approved' ? 'Entrega aprobada' : 'Aprobación registrada', r.approvals + ' de ' + r.needed + ' aprobaciones.');
@@ -725,7 +737,7 @@ document.addEventListener('click', function (e) {
   else if (acc === 'tema') { var t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; guardar('convite.tema', t); temaIcono(); }
 });
 document.addEventListener('change', function (e) {
-  if (e.target.name === 'c-tipo' && S.view === 'crear') { var g = function (id) { var el = $(id); return el ? el.value : ''; }; S.formC = { nombre: g('c-nombre').trim(), tipo: e.target.value, billetera: g('c-billetera').trim(), monto: g('c-monto'), aprob: g('c-aprob') || '2' }; render(false); var r = document.querySelector('input[name="c-tipo"]:checked'); if (r) r.focus(); }
+  if (e.target.name === 'c-tipo' && S.view === 'crear') { var g = function (id) { var el = $(id); return el ? el.value : ''; }; S.formC = { nombre: g('c-nombre').trim(), tipo: e.target.value, billetera: g('c-billetera').trim(), monto: g('c-monto'), aprob: g('c-aprob') || '50' }; render(false); var r = document.querySelector('input[name="c-tipo"]:checked'); if (r) r.focus(); }
 });
 document.addEventListener('submit', function (e) { if (e.target.id === 'form-miembro') guardarMiembro(e); else if (e.target.id === 'form-circulo') guardarCirculo(e); });
 document.addEventListener('keydown', function (e) {
