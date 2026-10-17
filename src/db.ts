@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS circles (
   kind TEXT NOT NULL DEFAULT 'natillera',   -- natillera | cadena | circulo
   pot_wallet TEXT NOT NULL,                  -- billetera destino (caja del círculo)
   contribution INTEGER,                      -- unidades mínimas del activo de la caja (solo en cadena)
-  min_approvals INTEGER NOT NULL DEFAULT 2,  -- aprobaciones necesarias para un desembolso o cierre
+  min_approvals INTEGER NOT NULL DEFAULT 2,  -- respaldo para círculos viejos sin approval_percent
+  approval_percent INTEGER,                  -- porcentaje de aprobación del grupo (1..100, sección 1b)
   round INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'open',       -- open | closed
   asset_code TEXT DEFAULT 'USD',
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS payouts (
   purpose TEXT,                              -- destino o motivo del desembolso solidario (modelo Fomentamos)
   kind TEXT NOT NULL DEFAULT 'entrega',      -- entrega | reparto
   closing_id INTEGER,
+  needed INTEGER,                            -- umbral congelado de aprobaciones al crear la entrega
   status TEXT NOT NULL DEFAULT 'requested',  -- requested | approved | paying | paid | failed
   outgoing_id TEXT,
   paid_at TEXT,
@@ -68,6 +70,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE TABLE IF NOT EXISTS closings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   circle_id INTEGER NOT NULL,
+  needed INTEGER,                            -- umbral congelado de aprobaciones al crear el cierre
   status TEXT NOT NULL DEFAULT 'proposed',   -- proposed | approved | paying | done
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -81,6 +84,7 @@ CREATE TABLE IF NOT EXISTS closing_approvals (
 // Migración ligera para bases circulos.db ya creadas antes de agregar columnas nuevas
 const circleCols = db.prepare('PRAGMA table_info(circles)').all() as { name: string; notnull: number }[];
 for (const [col, def] of [
+  ['approval_percent', 'INTEGER'],
   ['status', "TEXT NOT NULL DEFAULT 'open'"],
   ['asset_code', "TEXT DEFAULT 'USD'"],
   ['asset_scale', 'INTEGER DEFAULT 2'],
@@ -99,13 +103,14 @@ if (circleCols.find((c) => c.name === 'contribution')?.notnull === 1) {
       pot_wallet TEXT NOT NULL,
       contribution INTEGER,
       min_approvals INTEGER NOT NULL DEFAULT 2,
+      approval_percent INTEGER,
       round INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'open',
       asset_code TEXT DEFAULT 'USD',
       asset_scale INTEGER DEFAULT 2
     );
-    INSERT INTO circles_v2 (id, name, kind, pot_wallet, contribution, min_approvals, round, status, asset_code, asset_scale)
-      SELECT id, name, kind, pot_wallet, CASE WHEN kind='cadena' THEN contribution ELSE NULL END, min_approvals, round,
+    INSERT INTO circles_v2 (id, name, kind, pot_wallet, contribution, min_approvals, approval_percent, round, status, asset_code, asset_scale)
+      SELECT id, name, kind, pot_wallet, CASE WHEN kind='cadena' THEN contribution ELSE NULL END, min_approvals, approval_percent, round,
              COALESCE(status, 'open'), COALESCE(asset_code, 'USD'), COALESCE(asset_scale, 2)
       FROM circles;
     DROP TABLE circles;
@@ -129,6 +134,7 @@ for (const [col, def] of [
   ['purpose', 'TEXT'],
   ['kind', "TEXT NOT NULL DEFAULT 'entrega'"],
   ['closing_id', 'INTEGER'],
+  ['needed', 'INTEGER'],
   ['outgoing_id', 'TEXT'],
   ['paid_at', 'TEXT'],
   ['debit_json', 'TEXT'],
@@ -140,6 +146,10 @@ for (const [col, def] of [
   if (!payoutCols.some((c) => c.name === col)) {
     db.exec(`ALTER TABLE payouts ADD COLUMN ${col} ${def}`);
   }
+}
+const closingCols = db.prepare('PRAGMA table_info(closings)').all() as { name: string }[];
+if (!closingCols.some((c) => c.name === 'needed')) {
+  db.exec('ALTER TABLE closings ADD COLUMN needed INTEGER');
 }
 
 /** Reputación del CÍRCULO según tipo (Contrato v2 sección 1):

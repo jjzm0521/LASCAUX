@@ -93,6 +93,15 @@ function formatPayoutError(e: any): string {
   return e?.message ?? 'No pudimos procesar el pago, intenta de nuevo.';
 }
 
+// Umbral de aprobaciones por proporción (sección 1b): needed = min(votantes, max(1, ceil(approval_percent * votantes / 100)))
+function calcNeeded(circle: any, voters: number): number {
+  if (circle.approval_percent != null) {
+    const pct = Number(circle.approval_percent);
+    return Math.min(voters, Math.max(1, Math.ceil((pct * voters) / 100)));
+  }
+  return Number(circle.min_approvals ?? 2);
+}
+
 // Calcula el estado de la caja (pot) y las participaciones (shares) a partir del libro y entregas
 function computePot(circleId: number, rawMembers: any[]) {
   const confirmedRows = db
@@ -216,13 +225,15 @@ function expirePayingPayouts(circleId?: number) {
 app.get('/api/circles', (_req, res) => {
   const rows = (
     db.prepare(
-      `SELECT c.id, c.name, c.kind, c.round, c.contribution, c.min_approvals, c.status,
+      `SELECT c.id, c.name, c.kind, c.round, c.contribution, c.min_approvals, c.approval_percent, c.status,
         c.asset_code AS assetCode, c.asset_scale AS assetScale,
         (SELECT COUNT(*) FROM members m WHERE m.circle_id=c.id) AS members
        FROM circles c ORDER BY c.id DESC`,
     ).all() as any[]
   ).map((r) => ({
     ...r,
+    approval_percent: r.approval_percent ?? null,
+    approvalPercent: r.approval_percent ?? null,
     contribution: r.kind === 'cadena' && r.contribution != null ? String(r.contribution) : null,
     status: r.status ?? 'open',
   }));
@@ -246,9 +257,24 @@ app.post('/api/circles', async (req, res) => {
     const kind = req.body?.kind;
     if (!KINDS.includes(kind)) return res.status(400).json({ error: 'El tipo de círculo no es válido' });
 
-    const minApprovals = Number(req.body?.min_approvals);
-    if (!Number.isInteger(minApprovals) || minApprovals < 1 || minApprovals > 4) {
-      return res.status(400).json({ error: 'Las aprobaciones deben ser un número entre 1 y 4' });
+    const rawApprovalPct = req.body?.approval_percent ?? req.body?.approvalPercent;
+    let approvalPercent: number | null = null;
+    let minApprovals = 2;
+    if (rawApprovalPct !== undefined && rawApprovalPct !== null && rawApprovalPct !== '') {
+      const pct = Number(rawApprovalPct);
+      if (!Number.isInteger(pct) || pct < 1 || pct > 100) {
+        return res.status(400).json({ error: 'El porcentaje de aprobación debe ser un número entero entre 1 y 100' });
+      }
+      approvalPercent = pct;
+      const fallbackMin = Number(req.body?.min_approvals);
+      if (Number.isInteger(fallbackMin) && fallbackMin >= 1 && fallbackMin <= 4) {
+        minApprovals = fallbackMin;
+      }
+    } else {
+      minApprovals = Number(req.body?.min_approvals);
+      if (!Number.isInteger(minApprovals) || minApprovals < 1 || minApprovals > 4) {
+        return res.status(400).json({ error: 'Las aprobaciones deben ser un número entre 1 y 4' });
+      }
     }
 
     const rawWallet = typeof req.body?.pot_wallet === 'string' ? req.body.pot_wallet.trim() : '';
@@ -291,8 +317,10 @@ app.post('/api/circles', async (req, res) => {
       return res.status(400).json({ error: 'Ya hay demasiados círculos en este servidor' });
     }
     const ins = db
-      .prepare("INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals, status, asset_code, asset_scale) VALUES (?,?,?,?,?,'open',?,?)")
-      .run(name, kind, wa.id, contribution, minApprovals, wa.assetCode, wa.assetScale);
+      .prepare(
+        "INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals, approval_percent, status, asset_code, asset_scale) VALUES (?,?,?,?,?,?,'open',?,?)",
+      )
+      .run(name, kind, wa.id, contribution, minApprovals, approvalPercent, wa.assetCode, wa.assetScale);
     const id = Number(ins.lastInsertRowid);
     res.status(201).json({
       circle: {
@@ -303,6 +331,8 @@ app.post('/api/circles', async (req, res) => {
         status: 'open',
         contribution: contribution != null ? String(contribution) : null,
         min_approvals: minApprovals,
+        approval_percent: approvalPercent,
+        approvalPercent,
         pot_wallet: wa.id,
         assetCode: wa.assetCode,
         assetScale: wa.assetScale,
@@ -314,7 +344,7 @@ app.post('/api/circles', async (req, res) => {
   }
 });
 
-// Estado completo del círculo: miembros, caja (pot), libro de aportes, desembolsos, reputación
+// Estado completo del círculo: miembros, caja (pot), libro de aportes, desembolsos, cierre, reputación
 app.get('/api/circles/:id', (req, res) => {
   const id = Number(req.params.id);
   const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(id) as any;
@@ -349,6 +379,7 @@ app.get('/api/circles/:id', (req, res) => {
     hasContributed: activeRoundContribs.has(m.id),
     canRequestPayout:
       circleStatus !== 'closed' &&
+      rawMembers.length >= 2 &&
       (circle.kind === 'circulo' ? true : circle.kind === 'cadena' ? !hasRoundPayout && m.turn === currentTurn : false),
   }));
 
@@ -399,6 +430,7 @@ app.get('/api/circles/:id', (req, res) => {
       purpose: p.purpose ?? null,
       kind: p.kind ?? 'entrega',
       closingId: p.closing_id ?? null,
+      needed: p.needed ?? circle.min_approvals,
       status: p.status === 'processing_payout' ? 'paying' : p.status,
       approvals: p.approvals,
       approvedBy: (approvalsStmt.all(p.id) as { member_id: number }[]).map((a) => a.member_id),
@@ -411,6 +443,26 @@ app.get('/api/circles/:id', (req, res) => {
     };
   });
 
+  const rawClosing = db.prepare('SELECT * FROM closings WHERE circle_id=? ORDER BY id DESC LIMIT 1').get(id) as any;
+  let closing: any = null;
+  if (rawClosing) {
+    const approvedBy = (
+      db.prepare('SELECT member_id FROM closing_approvals WHERE closing_id=? ORDER BY member_id').all(rawClosing.id) as {
+        member_id: number;
+      }[]
+    ).map((a) => a.member_id);
+    const payoutIds = (
+      db.prepare('SELECT id FROM payouts WHERE closing_id=? ORDER BY id').all(rawClosing.id) as { id: number }[]
+    ).map((p) => p.id);
+    closing = {
+      id: rawClosing.id,
+      status: rawClosing.status,
+      needed: rawClosing.needed ?? circle.min_approvals,
+      approvedBy,
+      payouts: payoutIds,
+    };
+  }
+
   const pot = computePot(id, rawMembers);
 
   res.json({
@@ -421,6 +473,8 @@ app.get('/api/circles/:id', (req, res) => {
       pot_wallet: circle.pot_wallet,
       contribution: circle.kind === 'cadena' && circle.contribution != null ? String(circle.contribution) : null,
       min_approvals: circle.min_approvals,
+      approval_percent: circle.approval_percent ?? null,
+      approvalPercent: circle.approval_percent ?? null,
       round: circle.round,
       status: circleStatus,
       currentTurn,
@@ -428,6 +482,7 @@ app.get('/api/circles/:id', (req, res) => {
       assetScale: circle.asset_scale ?? null,
     },
     pot,
+    closing,
     members,
     ledger,
     payouts,
@@ -520,6 +575,7 @@ app.post('/api/circles/:id/members', async (req, res) => {
         hasContributed: false,
         canRequestPayout:
           circleStatus !== 'closed' &&
+          totalMembers >= 2 &&
           (circle.kind === 'circulo' ? true : circle.kind === 'cadena' ? !hasRoundPayout && turn === currentTurn : false),
       },
     });
@@ -721,7 +777,9 @@ app.post('/api/circles/:id/payouts', (req, res) => {
 
   const rawMembers = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(circleId) as any[];
   const membersCount = rawMembers.length;
-  if (!membersCount) return res.status(400).json({ error: 'El círculo no tiene miembros' });
+  if (membersCount < 2) {
+    return res.status(400).json({ error: 'Se necesitan al menos 2 personas en el círculo para entregar.' });
+  }
 
   expirePendingContributions(circleId);
   expirePayingPayouts(circleId);
@@ -772,11 +830,13 @@ app.post('/api/circles/:id/payouts', (req, res) => {
   }
 
   const purpose = typeof req.body?.purpose === 'string' && req.body.purpose.trim() ? req.body.purpose.trim() : null;
+  // Congelar needed al momento de pedir la entrega (votantes = miembros - 1, porque el beneficiario no vota)
+  const needed = calcNeeded(circle, membersCount - 1);
 
   const r = db
-    .prepare("INSERT INTO payouts (circle_id, member_id, round, amount, purpose, kind, status) VALUES (?,?,?,?,?,'entrega','requested')")
-    .run(circleId, member.id, circle.round, amount, purpose);
-  res.json({ payoutId: Number(r.lastInsertRowid), amount, purpose, kind: 'entrega', status: 'requested', round: circle.round });
+    .prepare("INSERT INTO payouts (circle_id, member_id, round, amount, purpose, kind, needed, status) VALUES (?,?,?,?,?,'entrega',?,'requested')")
+    .run(circleId, member.id, circle.round, amount, purpose, needed);
+  res.json({ payoutId: Number(r.lastInsertRowid), amount, purpose, kind: 'entrega', needed, status: 'requested', round: circle.round });
 });
 
 app.post('/api/payouts/:id/approve', (req, res) => {
@@ -797,12 +857,128 @@ app.post('/api/payouts/:id/approve', (req, res) => {
   db.prepare('INSERT OR IGNORE INTO approvals (payout_id, member_id) VALUES (?,?)').run(id, approver.id);
   const n = (db.prepare('SELECT COUNT(*) n FROM approvals WHERE payout_id=?').get(id) as any).n;
 
+  const needed = payout.needed ?? circle.min_approvals;
   let status = payout.status === 'processing_payout' ? 'paying' : payout.status;
-  if (n >= circle.min_approvals && payout.status === 'requested') {
+  if (n >= needed && payout.status === 'requested') {
     status = 'approved';
     db.prepare("UPDATE payouts SET status='approved' WHERE id=? AND status='requested'").run(id);
   }
-  res.json({ approvals: n, needed: circle.min_approvals, status, round: circle.round });
+  res.json({ approvals: n, needed, status, round: circle.round });
+});
+
+// Fase 3: Solicitar el cierre de una natillera y crear los repartos proporcionales
+app.post('/api/circles/:id/closing', (req, res) => {
+  const circleId = Number(req.params.id);
+  const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(circleId) as any;
+  if (!circle) return res.status(404).json({ error: 'Círculo no existe' });
+  if ((circle.status ?? 'open') === 'closed') {
+    return res.status(400).json({ error: 'Este círculo ya está cerrado' });
+  }
+  if (circle.kind !== 'natillera') {
+    return res.status(400).json({ error: 'Solo una natillera tiene cierre con reparto proporcional' });
+  }
+
+  const requester = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(req.body?.memberId, circleId) as any;
+  if (!requester) return res.status(404).json({ error: 'Miembro no pertenece al círculo' });
+
+  const rawMembers = db.prepare('SELECT * FROM members WHERE circle_id=? ORDER BY turn').all(circleId) as any[];
+  const membersCount = rawMembers.length;
+  if (membersCount < 2) {
+    return res.status(400).json({ error: 'Se necesitan al menos 2 personas en el círculo para entregar.' });
+  }
+
+  const existingClosing = db.prepare('SELECT id FROM closings WHERE circle_id=?').get(circleId) as any;
+  if (existingClosing) {
+    return res.status(400).json({ error: 'Ya existe un cierre solicitado para esta natillera' });
+  }
+
+  expirePendingContributions(circleId);
+  expirePayingPayouts(circleId);
+
+  const pot = computePot(circleId, rawMembers);
+  if (BigInt(pot.balance) <= 0n) {
+    return res.status(400).json({ error: 'La caja no tiene saldo suficiente para esta entrega.' });
+  }
+
+  // En el cierre todos los miembros pueden votar (votantes = miembros)
+  const needed = calcNeeded(circle, membersCount);
+
+  const createClosingTx = db.transaction(() => {
+    const insClosing = db
+      .prepare("INSERT INTO closings (circle_id, needed, status) VALUES (?,?,'proposed')")
+      .run(circleId, needed);
+    const closingId = Number(insClosing.lastInsertRowid);
+
+    const insPayout = db.prepare(
+      "INSERT INTO payouts (circle_id, member_id, round, amount, purpose, kind, closing_id, needed, status) VALUES (?,?,?,?,'Reparto de cierre','reparto',?,?,'requested')",
+    );
+    const createdPayouts: any[] = [];
+    for (const s of pot.shares) {
+      if (BigInt(s.share) > 0n) {
+        const pRes = insPayout.run(circleId, s.memberId, circle.round, s.share, closingId, needed);
+        createdPayouts.push({
+          id: Number(pRes.lastInsertRowid),
+          member_id: s.memberId,
+          name: s.name,
+          amount: s.share,
+          purpose: 'Reparto de cierre',
+          kind: 'reparto',
+          closingId,
+          needed,
+          approvals: 0,
+          approvedBy: [],
+          status: 'requested',
+          round: circle.round,
+          outgoingId: null,
+          paidAt: null,
+          debit: null,
+          receive: null,
+          error: null,
+        });
+      }
+    }
+    return { closingId, createdPayouts };
+  });
+
+  const { closingId, createdPayouts } = createClosingTx();
+  res.json({
+    closingId,
+    id: closingId,
+    needed,
+    status: 'proposed',
+    approvals: 0,
+    approvedBy: [],
+    payouts: createdPayouts.map((p) => p.id),
+  });
+});
+
+// Fase 3: Aprobar el cierre de una natillera (1 voto por miembro; al llegar a needed, todos sus repartos pasan a approved)
+app.post('/api/closings/:id/approve', (req, res) => {
+  const id = Number(req.params.id);
+  const closing = db.prepare('SELECT * FROM closings WHERE id=?').get(id) as any;
+  if (!closing) return res.status(404).json({ error: 'Cierre no existe' });
+
+  const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(closing.circle_id) as any;
+  if (!circle) return res.status(404).json({ error: 'Círculo no existe' });
+
+  const approver = db.prepare('SELECT * FROM members WHERE id=? AND circle_id=?').get(req.body?.memberId, circle.id) as any;
+  if (!approver) return res.status(404).json({ error: 'Miembro aprobador no pertenece al círculo' });
+
+  db.prepare('INSERT OR IGNORE INTO closing_approvals (closing_id, member_id) VALUES (?,?)').run(id, approver.id);
+  const n = (db.prepare('SELECT COUNT(*) n FROM closing_approvals WHERE closing_id=?').get(id) as any).n;
+
+  const needed = closing.needed ?? circle.min_approvals;
+  let status = closing.status;
+  if (n >= needed && (closing.status === 'proposed' || closing.status === 'requested')) {
+    status = 'approved';
+    const approveClosingTx = db.transaction(() => {
+      db.prepare("UPDATE closings SET status='approved' WHERE id=? AND status IN ('proposed','requested')").run(id);
+      db.prepare("UPDATE payouts SET status='approved' WHERE closing_id=? AND status='requested'").run(id);
+    });
+    approveClosingTx();
+  }
+
+  res.json({ approvals: n, needed, status });
 });
 
 // Estado individual de una entrega para el stepper y el comprobante
@@ -832,6 +1008,7 @@ app.get('/api/payouts/:id', (req, res) => {
     round: row.round,
     kind: row.kind ?? 'entrega',
     closingId: row.closing_id ?? null,
+    needed: row.needed ?? null,
     amount: String(row.amount),
     status: row.status === 'processing_payout' ? 'paying' : row.status,
     expiresAt,
@@ -915,6 +1092,10 @@ app.post('/api/payouts/:id/execute', async (req, res) => {
       return res.status(400).json({ error: 'Ya hay una entrega en proceso de pago en este círculo' });
     }
 
+    if (payout.closing_id) {
+      db.prepare("UPDATE closings SET status='paying' WHERE id=? AND status='approved'").run(payout.closing_id);
+    }
+
     try {
       const { redirectUrl, state } = await startPayout({
         potWallet: circle.pot_wallet,
@@ -975,6 +1156,17 @@ app.get('/api/payouts/:id/finish', async (req, res) => {
       const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(row.circle_id) as any;
       if (circle && circle.kind === 'cadena') {
         db.prepare('UPDATE circles SET round = round + 1 WHERE id=?').run(circle.id);
+      }
+      if (row.closing_id) {
+        const remaining = (
+          db.prepare("SELECT COUNT(*) n FROM payouts WHERE closing_id=? AND status != 'paid'").get(row.closing_id) as any
+        ).n;
+        if (remaining === 0) {
+          db.prepare("UPDATE closings SET status='done' WHERE id=?").run(row.closing_id);
+          db.prepare("UPDATE circles SET status='closed' WHERE id=?").run(row.circle_id);
+        } else {
+          db.prepare("UPDATE closings SET status='paying' WHERE id=? AND status='approved'").run(row.closing_id);
+        }
       }
     }
     res.redirect(`/?circle=${row.circle_id}&payout=ok&p=${id}`);
