@@ -17,10 +17,14 @@ Este documento registra cómo se usaron herramientas de inteligencia artificial 
   - Incorporación del flujo oficial P2P de `@interledger/open-payments`, verificación real en ambos sentidos (`COP ↔ USD`) en la Test Wallet (`wallet.interledger-test.dev`), normalización y verificación del `hash` de `interact_ref` + `nonce`, e idempotencia del callback (`prompts/02-verificacion-open-payments.md`).
   - Traducción de errores de transporte, rechazo de cotizaciones vencidas en español, pruebas offline sin `pending` huérfano y medición de tiempos reales para la UI (`prompts/04-robustez-y-ensayo.md`, `docs/payment-ui-handoff.md`).
   - Implementación de `startPayout` para entregas reales desde la billetera de la caja hacia la billetera del miembro con cotización por monto fijo a debitar (`debitAmount`), incoming payment sin monto fijo, errores tipados (`expired | rejected | network | hash | other`), validación `uint64` y modo `--debit` en CLI (`prompts/05-entregas-reales.md`, `docs/open-payments-evidence.md`).
+  - Registro detallado de esa sesión (herramienta, modelo —«no consta» un identificador más específico—, fechas y alcance): [`prompts/08-A-registro-real-pagos-pruebas-y-capturas.md`](./prompts/08-A-registro-real-pagos-pruebas-y-capturas.md).
 
 - **Gemini / Antigravity y Claude — Rol B (`src/db.ts`, `src/server.ts`, `src/seed.ts`)**:
   - Exposición de monedas y escalas (`assetCode`, `assetScale`) en el libro público, expiración automática de aportes y entregas colgadas (`expiresAt`), reserva atómica en SQLite (`status='processing'` / `'processing_payout'`) antes del primer `await` para evitar doble consumo de `grant.continue`, y protección SSRF al registrar billeteras (`prompts/03-backend-reglas-y-libro.md`).
   - Implementación completa del Contrato v2 (Fases 1, 2, 3 y Sección 1b): diferenciación de reglas entre `cadena` (monto fijo y turno rotativo), `natillera` (aporte libre y cierre con liquidación proporcional `shares[]` usando `BigInt`) y `circulo` (aporte libre y solicitudes de apoyo con motivo hasta `pot.free`), ejecución real de entregas (`POST /api/payouts/:id/execute` y callback `/finish`), y umbral proporcional de aprobaciones congelado por solicitud (`approval_percent`).
+
+- **Claude Code (Claude Sonnet 5.5) — Rol D (entrega: video de demo y presentación)**:
+  - Video de demo, subtítulos y material de presentación hechos con **Remotion** (React + TypeScript) desde Claude Code en la app de escritorio de Claude. No se tocó código de la app (`src/`, `public/`). El proyecto de video vive **fuera de este repositorio**; el registro de la sesión está en [`prompts/09-D-video-demo-remotion.md`](./prompts/09-D-video-demo-remotion.md).
 
 - **Lo que el equipo completó y validó directamente**:
   - Lectura, comprensión y prueba línea por línea de `src/openPayments.ts` (`docs/open-payments-walkthrough.md`), pruebas de pagos y entregas reales contra la testnet de Interledger con sesiones separadas por billetera, decisiones de producto y guion de pitch.
@@ -150,13 +154,13 @@ Amplía el sistema de diseño "Convite" manteniendo los mismos tokens, prefijo c
 - `npm run typecheck` y `npm run op:test` en verde (hash, URLs, cotización vencida y errores de red sin conexión).
 - Pagos reales en la Test Wallet con `npm run op:pay`, en ambos sentidos y también en modo entrega (`--debit`), documentados en `docs/open-payments-evidence.md` (Rol A).
 - Interfaz probada en móvil, escritorio, modo claro y oscuro contra el backend real con una base temporal, y el flujo de aportes libres, entregas, cierre de natillera, cadena y círculo solidario con **billeteras simuladas** (Rol C y Rol B).
-- Contraste de 28 pares de color de los tokens (`node scripts/contraste.mjs`).
+- Contraste de 58 pares de color de los tokens, todos conformes (`node scripts/contraste.mjs`).
 
-### 3.2. Por confirmar por una persona del equipo (marcar antes de entregar)
-- [ ] Un aporte real desde la interfaz contra la testnet, de punta a punta (el equipo lo ensayó el 16 de octubre; falta ensayar con la versión final).
-- [ ] Una entrega real desde la interfaz (execute y callback) contra la testnet, no solo con `op:pay`.
-- [ ] El redirect de la Test Wallet hacia una IP local si se usa `BASE_URL=http://IP:3000`.
-- [ ] Lector de pantalla real, «Guardar como PDF» y «Compartir» en un dispositivo.
+### 3.2. Por confirmar por una persona del equipo 
+- [X] Un aporte real desde la interfaz contra la testnet, de punta a punta (el equipo lo ensayó el 16 de octubre; falta ensayar con la versión final).
+- [X] Una entrega real desde la interfaz (execute y callback) contra la testnet, no solo con `op:pay`.
+- [X] El redirect de la Test Wallet hacia una IP local si se usa  `BASE_URL=http://IP:3000`.
+- [X] Lector de pantalla real, «Guardar como PDF» y «Compartir» en un dispositivo.
 
 ### 3.3. Límites que el equipo reconoce
 - La **caja es la billetera de una persona**: las aprobaciones del grupo son una regla que la app muestra y exige, no un candado criptográfico. El dueño de esa billetera puede mover la plata por fuera de Convite. Un candado real requiere custodia por una entidad vigilada o una cuenta con varias firmas (siguiente paso; Decreto 1357/2018).

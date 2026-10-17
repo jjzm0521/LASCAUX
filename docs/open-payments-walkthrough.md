@@ -23,6 +23,6 @@ El módulo mueve un monto fijo a recibir. Todas las cantidades son cadenas de en
 
 ## Límites de integración
 
-El guard de callback de server.ts evita repeticiones posteriores a persistir el resultado; no garantiza exclusión frente a dos callbacks simultáneos. Tampoco resuelve una caída después de crear outgoing pero antes de guardar outgoing_id. Requiere estrategia de idempotencia/reconciliación adicional antes de producción.
+Actualización (commits `8802148` y `2fe9999`): server.ts reserva de forma atómica el intento (`UPDATE … SET status='processing' … WHERE … status IN ('pending','failed')`) antes del primer `await`, así que dos callbacks simultáneos ya no ejecutan dos pagos. Sigue sin resolverse una caída después de crear outgoing pero antes de guardar outgoing_id: al reiniciar, el servidor devuelve los intentos `processing` a `pending` conservando `pending_json`, y habría que reconciliar consultando el outgoing remoto. Requiere esa estrategia de reconciliación antes de producción.
 
 La app marca confirmed al recibir la creación de outgoing y no consulta la liquidación final. Un recurso con failed=true no debería marcarse confirmed. Los tokens pendientes de aportes fallidos también requieren política de eliminación y retención.

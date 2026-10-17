@@ -1,4 +1,6 @@
 # Plan para 4 personas (Vie 16 oct → entrega Sáb 17 oct 11:00)
+> Documento histórico: es el plan inicial. La aprobación por proporción del grupo ([contrato v2, §1b](docs/contrato-api-v2.md)) reemplazó a «M aprobaciones»; el estado final está en [README.md](README.md) y [AI_USAGE.md](AI_USAGE.md).
+
 - **A – Open Payments**: src/openPayments.ts. Meta: primer pago extremo a extremo entre 2 billeteras de prueba ANTES de las 14:00 vie. Verificar formato de private.key, monedas disponibles, hash del callback.
 - **B – Backend/DB**: src/db.ts, server.ts. Turnos, desembolso con M aprobaciones, reputación.
 - **C – Frontend**: public/index.html. Vista previa de la cotización ("se debitan X, el círculo recibe Y"), estados claros, diseño móvil.
