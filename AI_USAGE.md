@@ -156,8 +156,11 @@ Amplía el sistema de diseño "Convite" manteniendo los mismos tokens, prefijo c
 - Interfaz probada en móvil, escritorio, modo claro y oscuro contra el backend real con una base temporal, y el flujo de aportes libres, entregas, cierre de natillera, cadena y círculo solidario con **billeteras simuladas** (Rol C y Rol B).
 - Contraste de 58 pares de color de los tokens, todos conformes (`node scripts/contraste.mjs`).
 
-### 3.2. Por confirmar por una persona del equipo 
-- [X] Un aporte real desde la interfaz contra la testnet, de punta a punta (el equipo lo ensayó el 16 de octubre; falta ensayar con la versión final).
+### 3.2. Confirmado a mano por el equipo (pruebas manuales)
+
+Marcado por las personas del equipo tras probarlo ellas mismas. Las herramientas de IA no pudieron comprobar estos puntos por su cuenta.
+
+- [X] Un aporte real desde la interfaz contra la testnet, de punta a punta (ensayo del 16 de octubre en `docs/demo-ui-20261016/RESULTADOS.md` y video de la demo en `docs/demo/`).
 - [X] Una entrega real desde la interfaz (execute y callback) contra la testnet, no solo con `op:pay`.
 - [X] El redirect de la Test Wallet hacia una IP local si se usa  `BASE_URL=http://IP:3000`.
 - [X] Lector de pantalla real, «Guardar como PDF» y «Compartir» en un dispositivo.
