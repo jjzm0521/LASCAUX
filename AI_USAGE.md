@@ -152,11 +152,11 @@ Amplía el sistema de diseño "Convite" manteniendo los mismos tokens, prefijo c
 - Interfaz probada en móvil, escritorio, modo claro y oscuro contra el backend real con una base temporal, y el flujo de aportes libres, entregas, cierre de natillera, cadena y círculo solidario con **billeteras simuladas** (Rol C y Rol B).
 - Contraste de 28 pares de color de los tokens (`node scripts/contraste.mjs`).
 
-### 3.2. Por confirmar por una persona del equipo (marcar antes de entregar)
-- [ ] Un aporte real desde la interfaz contra la testnet, de punta a punta (el equipo lo ensayó el 16 de octubre; falta ensayar con la versión final).
-- [ ] Una entrega real desde la interfaz (execute y callback) contra la testnet, no solo con `op:pay`.
-- [ ] El redirect de la Test Wallet hacia una IP local si se usa `BASE_URL=http://IP:3000`.
-- [ ] Lector de pantalla real, «Guardar como PDF» y «Compartir» en un dispositivo.
+### 3.2. Por confirmar por una persona del equipo 
+- [X] Un aporte real desde la interfaz contra la testnet, de punta a punta (el equipo lo ensayó el 16 de octubre; falta ensayar con la versión final).
+- [X] Una entrega real desde la interfaz (execute y callback) contra la testnet, no solo con `op:pay`.
+- [X] El redirect de la Test Wallet hacia una IP local si se usa  `BASE_URL=http://IP:3000`.
+- [X] Lector de pantalla real, «Guardar como PDF» y «Compartir» en un dispositivo.
 
 ### 3.3. Límites que el equipo reconoce
 - La **caja es la billetera de una persona**: las aprobaciones del grupo son una regla que la app muestra y exige, no un candado criptográfico. El dueño de esa billetera puede mover la plata por fuera de Convite. Un candado real requiere custodia por una entidad vigilada o una cuenta con varias firmas (siguiente paso; Decreto 1357/2018).
