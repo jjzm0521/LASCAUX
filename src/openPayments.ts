@@ -1,7 +1,7 @@
-// Módulo central de Open Payments. Flujo "monto fijo a recibir" (remesa entre monedas):
-//   1) Crear incoming payment en la billetera DESTINO (caja del círculo)
-//   2) Crear quote en la billetera ORIGEN (el miembro) -> dice cuánto se debita
-//   3) Pedir grant interactivo de outgoing-payment -> redirigir al miembro a autorizar
+// Módulo central: aportes con monto fijo a recibir y entregas con monto fijo a debitar.
+//   1) Crear incoming payment en DESTINO (caja para aportes, miembro para entregas)
+//   2) Crear quote en ORIGEN, fijando receiveAmount o debitAmount
+//   3) Pedir grant interactivo de outgoing-payment -> el dueño del origen autoriza
 //   4) Callback: verificar hash, continuar grant, crear outgoing payment
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
@@ -14,17 +14,36 @@ import {
 
 let client: AuthenticatedClient | null = null;
 
+export type PaymentErrorCode = 'expired' | 'rejected' | 'network' | 'hash' | 'other';
+export class PaymentError extends Error {
+  constructor(public readonly code: PaymentErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PaymentError';
+  }
+}
+
 // El SDK guarda el fallo de transporte en description, separado del mensaje genérico.
 // No confundir un rechazo HTTP de autorización con un problema de conexión.
-export function paymentError(error: unknown): Error {
-  if (!error || typeof error !== 'object') return new Error('No pudimos procesar el pago, intenta de nuevo');
+export function paymentError(error: unknown): PaymentError {
+  if (error instanceof PaymentError) return error;
+  if (!error || typeof error !== 'object') return new PaymentError('other', 'No pudimos procesar el pago, intenta de nuevo');
   const e = error as { message?: string; description?: string; name?: string; status?: number; code?: string };
   const transport = `${e.message ?? ''} ${e.description ?? ''} ${e.name ?? ''} ${e.code ?? ''}`;
   if ((e.status === undefined && /fetch failed|failed to fetch|network|timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up/i.test(transport)) ||
       [502, 503, 504].includes(e.status ?? 0)) {
-    return new Error('No pudimos conectar con la billetera de prueba, intenta de nuevo', { cause: error });
+    return new PaymentError('network', 'No pudimos conectar con la billetera de prueba, intenta de nuevo', { cause: error });
   }
-  return error instanceof Error ? error : new Error('No pudimos procesar el pago, intenta de nuevo');
+  const code: PaymentErrorCode = ['grant_rejected', 'request_denied', 'access_denied'].includes(e.code ?? '') ||
+    /^(El miembro|El dueño de la billetera) rechazó el pago$/.test(e.message ?? '') ? 'rejected' : 'other';
+  return new PaymentError(code, error instanceof Error ? error.message : 'No pudimos procesar el pago, intenta de nuevo', { cause: error });
+}
+
+function positiveUnits(value: string, context: 'aporte' | 'entrega'): string {
+  if (typeof value !== 'string' || !/^\d+$/.test(value) || BigInt(value) === 0n) {
+    throw new PaymentError('other', `El monto ${context === 'aporte' ? 'del aporte' : 'de la entrega'} debe ser un entero positivo en unidades mínimas`);
+  }
+  if (BigInt(value) > 18446744073709551615n) throw new PaymentError('other', 'El monto supera el máximo admitido por Open Payments');
+  return BigInt(value).toString();
 }
 
 // Las billeteras pueden escribirse como $ilp... ; las URL reales son https
@@ -58,7 +77,7 @@ export interface PendingPayment {
   authServer: string;
   debit: { value: string; assetCode: string; assetScale: number };
   receive: { value: string; assetCode: string; assetScale: number };
-  expiresAt?: string; // la cotización caduca: el miembro debe autorizar antes de esta hora
+  expiresAt?: string; // el outgoing debe crearse antes de esta hora
 }
 
 /** receiveValue: entero en unidades mínimas del activo del destino (ej. 1000 = 10.00 USD si scale=2) */
@@ -70,8 +89,31 @@ export async function startPayment(opts: {
 }): Promise<StartResult> {
   const startedAt = performance.now();
   try {
-    const result = await startPaymentRequest(opts);
+    const result = await startPaymentRequest({ ...opts, value: positiveUnits(opts.receiveValue, 'aporte'), mode: 'receive' });
     console.info('[OpenPayments] Solicitud preparada', {
+      durationMs: Math.round(performance.now() - startedAt),
+      quoteRemainingMs: result.state.expiresAt ? Date.parse(result.state.expiresAt) - Date.now() : null,
+    });
+    return result;
+  } catch (error) {
+    throw paymentError(error);
+  }
+}
+
+/** debitValue: entero en unidades mínimas del activo de la caja; autoriza su dueño. */
+export async function startPayout(opts: {
+  potWallet: string;
+  memberWallet: string;
+  debitValue: string;
+  finishUri: string;
+}): Promise<StartResult> {
+  const startedAt = performance.now();
+  try {
+    const result = await startPaymentRequest({
+      senderWallet: opts.potWallet, receiverWallet: opts.memberWallet,
+      value: positiveUnits(opts.debitValue, 'entrega'), mode: 'debit', finishUri: opts.finishUri,
+    });
+    console.info('[OpenPayments] Entrega preparada', {
       durationMs: Math.round(performance.now() - startedAt),
       quoteRemainingMs: result.state.expiresAt ? Date.parse(result.state.expiresAt) - Date.now() : null,
     });
@@ -85,14 +127,15 @@ export async function startPayment(opts: {
 async function startPaymentRequest(opts: {
   senderWallet: string;
   receiverWallet: string;
-  receiveValue: string;
+  value: string;
+  mode: 'receive' | 'debit';
   finishUri: string;
 }): Promise<StartResult> {
   const c = await getClient();
   const sender = await c.walletAddress.get({ url: toUrl(opts.senderWallet) });
   const receiver = await c.walletAddress.get({ url: toUrl(opts.receiverWallet) });
 
-  // 1) incoming payment en la caja del círculo
+  // 1) incoming en destino: sin monto fijo para entregas, fijo para aportes.
   const incGrant = await c.grant.request(
     { url: receiver.authServer },
     { access_token: { access: [{ type: 'incoming-payment', actions: ['create'] }] } },
@@ -100,16 +143,16 @@ async function startPaymentRequest(opts: {
   if (!isFinalizedGrantWithAccessToken(incGrant)) throw new Error('Grant incoming-payment no finalizado');
 
   const receiveAmount = {
-    value: opts.receiveValue,
+    value: opts.value,
     assetCode: receiver.assetCode,
     assetScale: receiver.assetScale,
   };
   const incoming = await c.incomingPayment.create(
     { url: receiver.resourceServer, accessToken: incGrant.access_token.value },
-    { walletAddress: receiver.id, incomingAmount: receiveAmount },
+    opts.mode === 'receive' ? { walletAddress: receiver.id, incomingAmount: receiveAmount } : { walletAddress: receiver.id },
   );
 
-  // 2) quote en la billetera del miembro (fija lo que recibe el círculo)
+  // 2) quote en origen: receiveAmount (aporte) o debitAmount (entrega).
   const quoteGrant = await c.grant.request(
     { url: sender.authServer },
     { access_token: { access: [{ type: 'quote', actions: ['create', 'read'] }] } },
@@ -118,7 +161,12 @@ async function startPaymentRequest(opts: {
 
   const quote: Quote = await c.quote.create(
     { url: sender.resourceServer, accessToken: quoteGrant.access_token.value },
-    { walletAddress: sender.id, receiver: incoming.id, method: 'ilp', receiveAmount },
+    {
+      walletAddress: sender.id, receiver: incoming.id, method: 'ilp',
+      ...(opts.mode === 'receive' ? { receiveAmount } : {
+        debitAmount: { value: opts.value, assetCode: sender.assetCode, assetScale: sender.assetScale },
+      }),
+    },
   );
 
   // 3) grant interactivo para el pago saliente (siempre requiere aprobación del dueño)
@@ -203,11 +251,11 @@ async function finishPaymentRequest(opts: {
   const base = state.authServer.replace(/\/$/, '');
   const args = { clientNonce: state.nonce, interactNonce: state.interactNonce, interactRef: opts.interactRef, hash: opts.hash };
   const ok = verifyHash({ ...args, authServer: base }) || verifyHash({ ...args, authServer: base + '/' });
-  if (!ok) throw new Error('Hash de interacción inválido');
+  if (!ok) throw new PaymentError('hash', 'Hash de interacción inválido');
 
   // No consumir el grant ni intentar crear un pago con una cotización ya vencida.
   if (state.expiresAt && Date.now() >= Date.parse(state.expiresAt)) {
-    throw new Error('La cotización venció, vuelve a intentar');
+    throw new PaymentError('expired', 'La cotización venció, vuelve a intentar');
   }
 
   const c = await getClient();
@@ -220,7 +268,7 @@ async function finishPaymentRequest(opts: {
 
   // La continuación también puede tardar y cruzar el vencimiento.
   if (state.expiresAt && Date.now() >= Date.parse(state.expiresAt)) {
-    throw new Error('La cotización venció, vuelve a intentar');
+    throw new PaymentError('expired', 'La cotización venció, vuelve a intentar');
   }
 
   const outgoing = await c.outgoingPayment.create(

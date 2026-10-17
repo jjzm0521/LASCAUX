@@ -1,5 +1,7 @@
 # Guía de lectura de src/openPayments.ts
 
+Actualización v2: `startPayout` comparte la preparación con `startPayment` mediante un modo interno. Aporte fija receiveAmount y crea incoming con incomingAmount; entrega fija debitAmount con moneda/escala de la caja y omite incomingAmount. Ambos devuelven StartResult/PendingPayment y reutilizan finishPayment. Se validan unidades positivas uint64 antes de acceder a la red. PaymentError conserva el mensaje y agrega code (expired/rejected/network/hash/other); B decide el texto contextual. Firmas existentes sin cambios.
+
 El módulo mueve un monto fijo a recibir. Todas las cantidades son cadenas de enteros en unidades mínimas; la escala del activo receptor determina cómo interpretar receiveValue.
 
 1. Los imports de crypto generan nonces, calculan SHA-256 y comparan hashes sin salida temprana. Los imports del SDK crean el cliente y discriminan grants pendientes/finalizados.

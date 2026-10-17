@@ -1,5 +1,103 @@
 # Evidencia de Open Payments — 16 de octubre de 2026
 
+## Entregas reales v2: débito fijo desde la caja
+
+Se leyeron las secciones 2 y 3 de docs/contrato-api-v2.md. startPayout({ potWallet, memberWallet, debitValue, finishUri }) devuelve el mismo StartResult/PendingPayment. Incoming en destino sin incomingAmount; quote en origen con debitAmount (moneda y escala de la caja). finishPayment reutilizado sin modificar firma ni retorno; solo se agregaron códigos a los errores. Ninguna prueba de esta sección simula un outgoing remoto como si fuera real.
+
+### Caja USD → miembro COP
+
+Comando: `npm run op:pay -- --debit https://ilp.interledger-test.dev/receptor_op https://ilp.interledger-test.dev/emisor_op 100`.
+
+```text
+Modo: entrega (monto fijo a debitar de la caja)
+1/3 Creando incoming payment, cotización y solicitud de autorización...
+[OpenPayments] Entrega preparada { durationMs: 3406, quoteRemainingMs: 299636 }
+    Preparación: 3408 ms.
+    Se debitan 1.00 USD; el destino recibe 3176.97 COP.
+    La cotización caduca: 2026-10-17T01:41:10.668Z
+
+2/3 Abre este enlace en el navegador y autoriza el pago en la billetera que envía:
+    [enlace de autorización temporal omitido]
+
+3/3 Autorización recibida. Verificando hash y creando el outgoing payment...
+    Finalización: 1842 ms.
+
+OK. Outgoing payment creado: https://ilp.interledger-test.dev/f537937b-7016-481b-b655-9f0d1014822c/outgoing-payments/74c5141e-f549-4785-9cd3-892a24abbb7f
+Estado: en curso/completado | debitAmount: 1.00 USD | receiveAmount: 3176.97 COP
+```
+
+debit={value:"100",assetCode:"USD",assetScale:2}; receive={value:"317697",assetCode:"COP",assetScale:2}. Accept real en Test Wallet; código de salida 0. expiresAt corresponde a las 20:41:10 de Bogotá del 16-oct. El tiempo de finalización excluye el tiempo humano de autorizar.
+
+### Caja COP → miembro USD
+
+Comando: `npm run op:pay -- --debit https://ilp.interledger-test.dev/emisor_op https://ilp.interledger-test.dev/receptor_op 10000`.
+
+```text
+Modo: entrega (monto fijo a debitar de la caja)
+1/3 Creando incoming payment, cotización y solicitud de autorización...
+[OpenPayments] Entrega preparada { durationMs: 3257, quoteRemainingMs: 299551 }
+    Preparación: 3259 ms.
+    Se debitan 100.00 COP; el destino recibe 0.03 USD.
+    La cotización caduca: 2026-10-17T01:42:34.296Z
+
+2/3 Abre este enlace en el navegador y autoriza el pago en la billetera que envía:
+    [enlace de autorización temporal omitido]
+
+3/3 Autorización recibida. Verificando hash y creando el outgoing payment...
+    Finalización: 1690 ms.
+
+OK. Outgoing payment creado: https://ilp.interledger-test.dev/f537937b-7016-481b-b655-9f0d1014822c/outgoing-payments/76af2572-bc00-4d31-8936-e46e115b35d2
+Estado: en curso/completado | debitAmount: 100.00 COP | receiveAmount: 0.03 USD
+```
+
+debit={value:"10000",assetCode:"COP",assetScale:2}; receive={value:"3",assetCode:"USD",assetScale:2}. Accept real; código de salida 0. expiresAt corresponde a las 20:42:34 de Bogotá del 16-oct. El débito coincide exactamente con el solicitado. Creación de outgoing no equivale a liquidación remota final; no se consultó dicha liquidación.
+
+### Rechazo real de una entrega
+
+Mismo comando USD → COP, debitValue=100. Preparación 3784 ms (módulo 3783 ms), quoteRemainingMs=299601, debit=1.00 USD, receive=3176.97 COP, expiresAt=2026-10-17T01:43:15.282Z. Se pulsó Decline y el callback real devolvió:
+
+```text
+ERROR [rejected]: El dueño de la billetera rechazó el pago
+```
+
+Código de salida 1; no se ejecutó finishPayment ni se creó outgoing. Para B: el rechazo que llega como query result=grant_rejected ocurre en su callback, antes de llamar finishPayment; debe convertirlo explícitamente con `new PaymentError('rejected', mensajeActual)` o su propio mapeo. `paymentError(new Error('El miembro rechazó el pago'))` también devuelve code=rejected sin cambiar el texto.
+
+### Vencimiento de una entrega
+
+Nueva entrega USD → COP con debitValue=100, preparada en 2629 ms, quoteRemainingMs=299639; debit=1.00 USD, receive=3176.97 COP; expiresAt=2026-10-17T01:43:54.082Z (20:43:54 Bogotá). Se mantiene una sola autorización en curso para evitar invalid session por interacciones simultáneas.
+
+Se pulsó Accept después de esa hora (aproximadamente 01:44:08 UTC / 20:44:08 Bogotá). Callback real recibido; salida del proceso:
+
+```text
+3/3 Autorización recibida. Verificando hash y creando el outgoing payment...
+
+ERROR [expired]: La cotización venció, vuelve a intentar
+```
+
+Código de salida 1, sin Outgoing payment creado. Aunque el CLI anuncia el paso 3 completo antes de llamar a finishPayment, el guard de vencimiento corta el flujo antes de continuar el grant y crear outgoing. En este ensayo el error español y code=expired corresponden a la protección del módulo nuevo, no a una simulación offline.
+
+Validación final: npm run typecheck, npm run op:test y git diff --check pasan. Las firmas públicas previas siguen iguales. Se preservaron los cambios concurrentes de otros roles en db.ts, seed.ts y public/; no se incorporan al commit de A.
+
+### Quién autoriza: comprobación y límite
+
+El grant outgoing identifica `sender.id`, que en una entrega es la wallet de la caja; lo solicita a su authServer y limita debitAmount a quote.debitAmount. La clave del cliente puede seguir siendo la de Emisor: autentica al cliente que pide permiso, no sustituye el consentimiento del dueño de Receptor.
+
+El texto «Juan Pérez is requesting access» de la Test Wallet identifica al cliente solicitante; no prueba por sí solo quién es el dueño de la caja ni quién tiene la sesión. Se contrastó con la página Accounts y con el origen de la cotización.
+
+Se inspeccionó la página Accounts de la sesión utilizada: Emisor COP y Receptor USD pertenecen al mismo usuario de Test Wallet. Por tanto, una sesión puede autorizar las dos; cambiar de cuenta monetaria seleccionada no es cambiar de usuario. No sería correcto afirmar que «la sesión de otra wallet» siempre es inválida: si ambas tienen el mismo dueño, es válida para ambas.
+
+El [servicio público de grants de Test Wallet](https://github.com/interledger/testnet/blob/main/packages/wallet/backend/src/grant/service.ts) comprueba `belongsToUser(userId, identifier)` al leer y al responder una interacción. Si la wallet no pertenece a ese usuario, rechaza el grant y lanza Forbidden('NO_ACCESS'). El [frontend](https://github.com/interledger/testnet/blob/main/packages/wallet/frontend/src/pages/grant-interactions/index.tsx) redirige ese caso a /no-access. Esto es revisión del código público main, no certificación de la revisión exacta desplegada ni una prueba negativa real con otro usuario.
+
+Se solicitó una cuenta ajena para el ensayo negativo; el usuario indicó continuar de forma independiente con las wallets conocidas y que el equipo está probando otras cuentas para el video. La negativa real con otro usuario queda para ese ensayo. No se cerró la sesión ni se pidieron/compartieron contraseñas.
+
+### Contrato de errores y montos para B
+
+PaymentError.code: expired | rejected | network | hash | other. Los mensajes existentes se conservan. Los errores genéricos HTTP 401/403 no se confunden con rechazo voluntario; tampoco `invalid quote` por sí solo demuestra vencimiento. Los rechazos explícitos request_denied/access_denied/grant_rejected se clasifican como rejected. Los errores originales se conservan en cause cuando se normalizan.
+
+receiveValue/debitValue deben ser strings de enteros positivos en unidades mínimas, máximo uint64 (18446744073709551615); se usa BigInt, sin pérdida por flotantes. Se aceptan ceros iniciales y se normalizan. Se rechazan vacío, cero, negativos, decimales, exponente, espacios y desbordamiento antes de llamar a la red. Mensaje de aporte: «El monto del aporte debe ser un entero positivo en unidades mínimas»; code=other.
+
+op:test incluye hash válido de una entrega, rechazo de hash alterado, expired sin red, los cinco códigos, flujos de receiveValue=1,17,12345 y máximo uint64 con SDK simulado, incoming sin monto en entrega, quote debit-only con moneda origen, grant limitado al débito y finishPayment reutilizado. Son pruebas offline de contrato, no pruebas de que una wallet tenga saldo para el máximo uint64.
+
 Ensayo posterior, mediciones de tiempos, rechazo real y contrato de errores para la interfaz: [payment-ui-handoff.md](payment-ui-handoff.md). Incluye una nueva captura del aporte completo desde la app.
 
 Ejecuciones reales desde este checkout, sin tokens ni llaves. Se omiten las URL de autorización interactivas (capacidades temporales); el resto de la salida del CLI se reproduce completo. Crear outgoing no acredita por sí solo liquidación final.

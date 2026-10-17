@@ -1,15 +1,18 @@
 // Prueba de extremo a extremo de Open Payments SIN base de datos, usando el mismo módulo que la app.
 //   npm run op:pay -- <billetera_que_envia> <billetera_que_recibe> [valor_a_recibir_en_unidades_minimas]
+// Entrega: npm run op:pay -- --debit <caja> <miembro> [valor_a_debitar_en_unidades_minimas]
 // Ejemplo (Juan -> Sofía, recibe 1.00 USD):
 //   npm run op:pay -- https://ilp.interledger-test.dev/emisor_op https://ilp.interledger-test.dev/receptor_op 100
 // Necesita WALLET_ADDRESS_URL, KEY_ID y PRIVATE_KEY_PATH en .env. Abre el enlace que imprime y autoriza en la billetera que envía.
 import 'dotenv/config';
 import express from 'express';
-import { startPayment, finishPayment, type PendingPayment } from './openPayments.js';
+import { startPayment, startPayout, finishPayment, PaymentError, paymentError, type PendingPayment } from './openPayments.js';
 
-const [sender, receiver, value = '100'] = process.argv.slice(2);
-if (!sender || !receiver) {
-  console.error('Uso: npm run op:pay -- <billetera_que_envia> <billetera_que_recibe> [valor]');
+const argv = process.argv.slice(2);
+const debitMode = argv.includes('--debit');
+const [sender, receiver, value = '100', ...extra] = argv.filter((arg) => arg !== '--debit');
+if (!sender || !receiver || extra.length || argv.some((arg) => arg.startsWith('--') && arg !== '--debit')) {
+  console.error('Uso: npm run op:pay -- [--debit] <billetera_que_envia> <billetera_que_recibe> [valor]');
   process.exit(1);
 }
 
@@ -18,8 +21,13 @@ const WAIT_MS = 10 * 60_000; // permite autorizar después de expiresAt para pro
 
 async function main() {
   const finishUri = `http://localhost:${PORT}/finish`;
+  const startedAt = performance.now();
+  console.log('Modo:', debitMode ? 'entrega (monto fijo a debitar de la caja)' : 'aporte (monto fijo a recibir)');
   console.log('1/3 Creando incoming payment, cotización y solicitud de autorización...');
-  const { redirectUrl, state } = await startPayment({ senderWallet: sender, receiverWallet: receiver, receiveValue: value, finishUri });
+  const { redirectUrl, state } = debitMode
+    ? await startPayout({ potWallet: sender, memberWallet: receiver, debitValue: value, finishUri })
+    : await startPayment({ senderWallet: sender, receiverWallet: receiver, receiveValue: value, finishUri });
+  console.log(`    Preparación: ${Math.round(performance.now() - startedAt)} ms.`);
 
   const fmt = (a: { value: string; assetCode: string; assetScale: number }) =>
     `${(Number(a.value) / 10 ** a.assetScale).toFixed(a.assetScale)} ${a.assetCode}`;
@@ -29,11 +37,13 @@ async function main() {
   console.log(`    ${redirectUrl}\n`);
 
   const params = await waitForCallback();
-  if (params.result === 'grant_rejected') throw new Error('El dueño de la billetera rechazó el pago');
+  if (params.result === 'grant_rejected') throw new PaymentError('rejected', 'El dueño de la billetera rechazó el pago');
   if (!params.interact_ref || !params.hash) throw new Error(`Callback sin interact_ref/hash: ${JSON.stringify(params)}`);
 
   console.log('3/3 Autorización recibida. Verificando hash y creando el outgoing payment...');
+  const finishingAt = performance.now();
   const outgoing = await finishPayment({ state: state as PendingPayment, interactRef: params.interact_ref, hash: params.hash });
+  console.log(`    Finalización: ${Math.round(performance.now() - finishingAt)} ms.`);
   console.log('\nOK. Outgoing payment creado:', outgoing.id);
   console.log('Estado:', outgoing.failed ? 'FALLIDO' : 'en curso/completado', '| debitAmount:', fmt(outgoing.debitAmount), '| receiveAmount:', fmt(outgoing.receiveAmount));
 }
@@ -53,4 +63,8 @@ function waitForCallback(): Promise<Record<string, string>> {
   });
 }
 
-main().then(() => process.exit(0)).catch((e) => { console.error('\nERROR:', e?.message ?? e, e?.description ?? ''); process.exit(1); });
+main().then(() => process.exit(0)).catch((error) => {
+  const e = paymentError(error);
+  console.error(`\nERROR [${e.code}]:`, e.message);
+  process.exit(1);
+});
