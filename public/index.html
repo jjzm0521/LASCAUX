@@ -212,9 +212,11 @@ function vInicio() {
     (d.ledger.length ? '<ul class="cv-libro" aria-label="Libro de aportes">' + d.ledger.map(function (l) {
       var e = ESTADO[l.status] || ESTADO.pending, rec = fmtMonto(l.receive), deb = fmtMonto(l.debit);
       var origen = deb && l.debit && l.receive && l.debit.assetCode !== l.receive.assetCode ? (l.status === 'confirmed' ? 'pagó ' : 'pagará ') + deb : '';
-      return '<li class="cv-fila">' + avatar(l, indiceMiembro(l.member_id)) + '<div class="cv-fila__texto"><div class="cv-fila__quien">' + esc(l.name) + '</div><div class="cv-fila__cuando">Ronda ' + l.round + ' · ' + esc(fmtFecha(l.created_at)) + '</div>' +
+      var abre = l.status === 'confirmed';
+      var fila = '<' + (abre ? 'button type="button" data-accion="comprobante" data-id="' + l.id + '" aria-label="Ver el comprobante de ' + esc(l.name) + ', ronda ' + l.round + '" class="cv-fila cv-fila--interactiva"' : 'div class="cv-fila"') + '>' + avatar(l, indiceMiembro(l.member_id)) + '<div class="cv-fila__texto"><div class="cv-fila__quien">' + esc(l.name) + '</div><div class="cv-fila__cuando">Ronda ' + l.round + ' · ' + esc(fmtFecha(l.created_at)) + '</div>' +
         '<span class="cv-chip cv-chip--' + e[0] + '">' + ico(e[1], 'cv-icono--xs') + e[2] + '</span></div>' +
-        '<div class="cv-fila__valor">' + (rec ? '<span class="cv-fila__monto cv-monto">' + esc(rec) + '</span>' : '') + (origen ? '<span class="cv-fila__origen">' + esc(origen) + '</span>' : '') + '</div></li>';
+        '<div class="cv-fila__valor">' + (rec ? '<span class="cv-fila__monto cv-monto">' + esc(rec) + '</span>' : '') + (origen ? '<span class="cv-fila__origen">' + esc(origen) + '</span>' : '') + (abre ? '<span class="cv-fila__ver">Ver comprobante</span>' : '') + '</div></' + (abre ? 'button' : 'div') + '>';
+      return '<li>' + fila + '</li>';
     }).join('') + '</ul>'
     : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes</h3><p class="cv-vacio__texto">Cuando alguien pague, aparecerá aquí y todos lo podrán ver.</p></div></div>') + '</section>';
 
@@ -279,7 +281,7 @@ function vExito() {
     (pagaste || recibio ? '<div class="cv-resumen">' + (pagaste ? '<div class="cv-resumen__fila"><span class="cv-texto-suave">Pagaste</span><strong class="cv-monto">' + esc(pagaste) + '</strong></div>' : '') +
       (recibio ? '<div class="cv-resumen__fila"><span class="cv-texto-suave">Tu círculo recibió</span><strong class="cv-monto">' + esc(recibio) + '</strong></div>' : '') + '</div>' : '') +
     '<p class="cv-nota cv-texto-suave">«Listo» significa que tu billetera aceptó enviar el aporte y quedó anotado aquí. La liquidación final la hace la red de pagos.</p>' +
-    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="ver-libro">' + ico('libro', 'cv-icono--sm') + 'Ver el libro de aportes</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div></main>';
+    '<div style="display:grid;gap:12px">' + (l ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="comprobante" data-id="' + l.id + '">' + ico('libro', 'cv-icono--sm') + 'Ver mi comprobante</button>' : '') + '<button type="button" class="cv-btn ' + (l ? 'cv-btn--secundario' : 'cv-btn--primario') + ' cv-btn--bloque" data-accion="ver-libro">' + ico('libro', 'cv-icono--sm') + 'Ver el libro de aportes</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div></main>';
 }
 
 function vError() {
@@ -292,12 +294,56 @@ function vError() {
     '<p class="cv-nota cv-texto-suave" style="text-align:center">Si el problema sigue, díselo a quien organiza el círculo.</p></main>';
 }
 
+
+function fmtFechaHora(sqlUtc) {
+  if (!sqlUtc) return null;
+  var d = new Date(String(sqlUtc).replace(' ', 'T') + 'Z');
+  return isNaN(d) ? null : d.toLocaleString('es-CO', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(/\.(?= de)/, '');
+}
+function billeteraCorta(u) { return '$' + String(u || '').replace(/^https?:\/\//, ''); }
+function datosComprobante(l) {
+  var d = S.data, m = d.members.find(function (x) { return x.id === l.member_id; }) || {};
+  var ref = l.outgoingId ? String(l.outgoingId).split('/').pop() : null;
+  var tasa = null;
+  if (l.debit && l.receive && l.debit.assetCode !== l.receive.assetCode) {
+    var u = function (a) { return Number(a.value) / Math.pow(10, a.assetScale); };
+    // con montos muy pequeños el redondeo de la billetera vuelve engañosa la tasa: no se muestra
+    if (u(l.debit) >= 1 && u(l.receive) >= 1) tasa = '1 ' + l.receive.assetCode + ' ≈ ' + l.debit.assetCode + ' ' + new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(u(l.debit) / u(l.receive));
+  }
+  return { miembro: m, ref: ref, tasa: tasa, cuando: fmtFechaHora(l.confirmedAt) };
+}
+function vComprobante() {
+  var d = S.data, l = d.ledger.find(function (x) { return x.id === S.compId; });
+  if (!l) return barraVolver(true) + '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No encontramos ese comprobante</h1><p class="cv-vacio__texto">Vuelve al libro e inténtalo de nuevo.</p></div></main>';
+  var x = datosComprobante(l), c = d.circle, soy = l.member_id === S.me.id;
+  var ESTADO = { confirmed: ['confirmado', 'check', 'Confirmado'], pending: ['espera', 'reloj', 'Esperando autorización'], failed: ['fallo', 'alerta', 'Falló'] }[l.status] || ['espera', 'reloj', 'Esperando autorización'];
+  var logo = (document.querySelector('.cv-barra .cv-logo') || { outerHTML: '' }).outerHTML.replace('height="32" width="121"', 'height="28" width="106"');
+  var fila = function (t, v) { return '<div class="cv-recibo__dato"><dt>' + t + '</dt><dd>' + v + '</dd></div>'; };
+  var refTxt = x.ref ? '<span class="cv-recibo__ref" title="' + esc(l.outgoingId) + '">' + esc(x.ref) + '</span>' : (l.status === 'pending' ? 'Se asigna al confirmarse' : 'No hay referencia');
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Comprobante</h1><p class="cv-texto-suave">' + (soy ? 'Tu aporte' : 'Aporte de ' + esc(l.name)) + ' de la ronda ' + l.round + '.</p></div>' +
+    '<article class="cv-recibo" aria-labelledby="t-rec"><div class="cv-recibo__cabecera">' + logo + '<span class="cv-chip cv-chip--' + ESTADO[0] + '">' + ico(ESTADO[1], 'cv-icono--xs') + ESTADO[2] + '</span></div>' +
+    '<div class="cv-recibo__total"><p class="cv-nota cv-texto-suave">Comprobante de aporte · ' + esc(c.name) + '</p><p id="t-rec" class="cv-monto-grande">' + esc(fmtMonto(l.receive) || '—') + '</p><p class="cv-texto-suave">Ronda ' + l.round + '</p></div>' +
+    '<dl class="cv-recibo__datos">' + fila('Pagó', esc(l.name)) + fila('Fecha y hora', x.cuando ? esc(x.cuando) : 'No disponible') +
+    fila(soy ? 'Salió de tu billetera' : 'Salió de su billetera', esc(fmtMonto(l.debit) || '—')) + fila('Llegó a la caja', esc(fmtMonto(l.receive) || '—')) + (x.tasa ? fila('Tasa aproximada', esc(x.tasa)) : '') +
+    fila('Billetera de origen', esc(billeteraCorta(x.miembro.wallet))) + fila('Billetera de la caja', esc(billeteraCorta(c.pot_wallet))) + fila('Referencia', refTxt) + '</dl>' +
+    '<p class="cv-recibo__pie">Este comprobante sale del libro público. Convite no guarda tu dinero: el pago fue de tu billetera a la caja del círculo. «Confirmado» significa que la billetera aceptó enviar el pago; la liquidación final la hace la red de pagos.</p></article>' +
+    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="imprimir">' + ico('flecha', 'cv-icono--sm').replace('<path d="M5 12h14M13 6l6 6-6 6"/>', '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>') + 'Guardar como PDF</button>' +
+    '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="compartir">Compartir</button></div></main>';
+}
+function compartir() {
+  var l = S.data.ledger.find(function (x) { return x.id === S.compId; }); if (!l) return;
+  var x = datosComprobante(l), texto = 'Aporte de ' + l.name + ' · ronda ' + l.round + ' · llegó ' + (fmtMonto(l.receive) || '') + (x.ref ? ' · ref. ' + x.ref : '') + ' · ' + S.data.circle.name;
+  if (navigator.share) { navigator.share({ title: 'Comprobante Convite', text: texto }).catch(function () {}); return; }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(texto).then(function () { aviso('exito', 'Copiado', 'Pega el resumen donde quieras compartirlo.'); }, function () { aviso('error', 'No se pudo copiar', 'Copia el texto a mano desde el comprobante.'); });
+  else aviso('info', 'Compartir no está disponible', 'Usa «Guardar como PDF» y envía el archivo.');
+}
+
 function vFalloCarga() {
   return '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No pudimos cargar tu círculo</h1><p class="cv-vacio__texto">' + esc(S.errorCarga || 'Revisa tu conexión e intenta de nuevo.') + '</p><button type="button" class="cv-btn cv-btn--primario" data-accion="recargar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button></div></main>';
 }
 
 /* ====================== render ====================== */
-var VISTAS = { arranque: vArranque, cargando: vCargando, inicio: vInicio, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
+var VISTAS = { comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: vInicio, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
 function render(enfocar) {
   if (S.data) S.me = yo();
   document.querySelector('.app').classList.toggle('app--arranque', S.view === 'arranque');
@@ -418,6 +464,13 @@ document.addEventListener('click', function (e) {
   else if (acc === 'continuar') continuar();
   else if (acc === 'inicio') { if (S.view === 'resumen' || S.view === 'pago2') olvidarPend(); S.pago = null; ir('inicio'); cargar(); }
   else if (acc === 'ver-libro') { ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  else if (acc === 'comprobante') { S.compId = Number(a.dataset.id); ir('comprobante'); }
+  else if (acc === 'imprimir') { // el PDF siempre sale en claro, aunque la pantalla esté en oscuro
+    var tema = document.documentElement.dataset.theme; document.documentElement.dataset.theme = 'light';
+    window.addEventListener('afterprint', function volver() { document.documentElement.dataset.theme = tema; window.removeEventListener('afterprint', volver); });
+    window.print();
+  }
+  else if (acc === 'compartir') compartir();
   else if (acc === 'vista-abrir') vistaAbrir();
   else if (acc === 'vista-elegir') vistaElegir(a.dataset.id);
   else if (acc === 'aprobar') aprobar(a.dataset.id);

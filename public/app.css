@@ -30,3 +30,15 @@ h1[tabindex="-1"]:focus { outline: none; }
 /* Arranque: pantalla completa, sin barra ni aviso de prueba */
 .app--arranque .cv-barra, .app--arranque .app__aviso-prueba { display: none; }
 .app--arranque .cv-splash--pantalla { flex: 1; }
+
+/* Filas del libro que abren el comprobante: son botones, deben verse como filas */
+button.cv-fila { width: 100%; border: 0; border-bottom: var(--borde-fino) solid var(--color-borde); text-align: left; font: inherit; color: inherit; border-radius: 0; }
+.cv-libro > li:last-child > button.cv-fila { border-bottom: 0; }
+.cv-fila__valor { justify-items: end; }
+
+/* "Guardar como PDF": imprime solo el comprobante */
+@media print {
+  .app__aviso-prueba, .cv-barra, .cv-avisos--fijos, #dialogos, .cv-btn, .cv-barra__volver { display: none !important; }
+  .app, .app__estrecho { max-width: none; }
+  body { background: #fff; }
+}
