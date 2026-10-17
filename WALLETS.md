@@ -1,4 +1,4 @@
-# Wallets de prueba para LAUCAUX
+# Wallets de prueba para LasCaux
 
 | Persona ficticia (nombre público) | Cuenta en la Test Wallet | Dirección Open Payments | Moneda |
 |---|---|---|---|
