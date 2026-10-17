@@ -251,7 +251,7 @@ function vInicio() {
     d.members.map(function (m, i) {
       var soy = m.id === me.id;
       return '<li class="cv-miembro">' + avatar(m, i, soy ? ' cv-avatar--yo' : '') + '<div class="cv-miembro__texto"><div class="cv-miembro__nombre">' + esc(m.name) + (soy ? ' (tú)' : '') + '</div>' +
-        '<div class="cv-miembro__meta">' + esc(PAISES[m.country] || m.country) + ' · turno ' + m.turn + '</div><div style="margin-top:6px">' + chipMiembro(m) + '</div></div></li>';
+        '<div class="cv-miembro__meta">' + esc(m.assetCode ? 'Billetera en ' + m.assetCode : (PAISES[m.country] || m.country)) + ' · turno ' + m.turn + '</div><div style="margin-top:6px">' + chipMiembro(m) + '</div></div></li>';
     }).join('') + '</ul></div>' +
     '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Agregar una billetera</button></section>';
 
@@ -421,8 +421,9 @@ function guardarMiembro(e) {
     aviso('exito', 'Billetera agregada', nombre + ' ya hace parte del círculo.');
   }).catch(function (er) {
     S.ocupado = false;
-    S.formError = { billetera: er.status === 404 ? 'Este servidor todavía no permite agregar billeteras. Avísale a quien mantiene el backend.' : er.message };
-    render(false); var p = $('billetera'); if (p) p.focus();
+    var enNombre = /nombre/i.test(er.message) && !/billetera/i.test(er.message);
+    S.formError = enNombre ? { nombre: er.message } : { billetera: er.status === 404 ? 'Este servidor todavía no permite agregar billeteras. Avísale a quien mantiene el backend.' : er.message };
+    render(false); var p = $(enNombre ? 'nombre' : 'billetera'); if (p) p.focus();
   });
 }
 function vFalloCarga() {
