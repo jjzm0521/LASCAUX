@@ -64,6 +64,11 @@ var ICONOS = {
   externo: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
   abajo: '<path d="M6 9l6 6 6-6"/>',
   cuenta: '<circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/>',
+  t_cadena: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  t_natillera: '<path d="M6 9h12v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M5 4h14v5H5z"/><path d="M10 15h4"/>',
+  t_circulo: '<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>',
+  mas: '<path d="M12 5v14M5 12h14"/>',
+  der: '<path d="M9 6l6 6-6 6"/>',
   casa: '<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
   entregas: '<circle cx="9" cy="9" r="5.5"/><path d="M14.5 9.8A5.5 5.5 0 1 1 9.8 14.5"/>',
   sol: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
@@ -218,10 +223,53 @@ function vCuenta(d, me, pote) {
     '<section class="cv-seccion" aria-labelledby="s-comp"><div class="cv-seccion__cabecera"><h2 id="s-comp" class="cv-seccion__titulo">Mis comprobantes</h2></div>' +
     (filas ? '<ul class="cv-libro" aria-label="Mis aportes">' + filas + '</ul>' : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes tuyos</h3><p class="cv-vacio__texto">Cuando pagues, tu comprobante aparecerá aquí.</p></div></div>') + '</section>';
 }
+// "La caja": usa el pot del backend v2 si existe; si no, lo calcula del libro (aportes confirmados y entregas aprobadas)
+function datosCaja(d, pote) {
+  var suma = function (ls, f) { return ls.reduce(function (t, x) { return t + Number(f(x) || 0); }, 0); };
+  var contribuido = suma(d.ledger.filter(function (l) { return l.status === 'confirmed' && l.receive; }), function (l) { return l.receive.value; });
+  var pagado = suma(d.payouts.filter(function (p) { return p.status === 'paid'; }), function (p) { return p.amount; });
+  var reservado = suma(d.payouts.filter(function (p) { return p.status === 'approved' || p.status === 'paying'; }), function (p) { return p.amount; });
+  var c = { contributed: contribuido, paidOut: pagado, reserved: reservado };
+  if (d.pot) c = { contributed: Number(d.pot.contributed), paidOut: Number(d.pot.paidOut), reserved: Number(d.pot.reserved) };
+  c.balance = c.contributed - c.paidOut; c.free = Math.max(0, c.balance - c.reserved);
+  return c;
+}
+function vCaja(d, pote) {
+  var c = datosCaja(d, pote);
+  var en = function (n) { return pote ? fmtMonto({ value: String(Math.round(n)), assetCode: pote.assetCode, assetScale: pote.assetScale }) : String(n); };
+  var pct = function (n) { return c.contributed > 0 ? (n / c.contributed * 100).toFixed(1) : '0.0'; };
+  var vacia = c.contributed === 0;
+  var medidor = vacia ? '<div class="cv-caja__medidor" role="img" aria-label="La caja está vacía"></div>' :
+    '<div class="cv-caja__medidor" role="img" aria-label="De ' + esc(en(c.contributed)) + ' aportados: ' + esc(en(c.paidOut)) + ' entregados, ' + esc(en(c.reserved)) + ' reservados y ' + esc(en(c.free)) + ' libres para entregar">' +
+    '<span class="cv-caja__tramo cv-caja__tramo--entregado" style="width:' + pct(c.paidOut) + '%"></span><span class="cv-caja__tramo cv-caja__tramo--reservado" style="width:' + pct(c.reserved) + '%"></span><span class="cv-caja__tramo cv-caja__tramo--libre" style="width:' + pct(c.free) + '%"></span></div>';
+  var fila = function (t, v, tipo, libre) { return '<div class="cv-caja__fila' + (libre ? ' cv-caja__fila--libre' : '') + '"><dt class="cv-caja__llave">' + (tipo ? '<span class="cv-caja__muestra cv-caja__muestra--' + tipo + '" aria-hidden="true"></span>' : '') + t + '</dt><dd class="cv-caja__valor">' + esc(en(v)) + '</dd></div>'; };
+  return '<section class="cv-tarjeta cv-caja" aria-labelledby="t-caja"><div class="cv-caja__saldo"><h2 id="t-caja" class="cv-caja__etiqueta" style="font-weight:var(--peso-fuerte)">La caja</h2><p class="cv-monto-grande">' + esc(pote ? en(c.balance) : '—') + '</p><p class="cv-caja__etiqueta">en la caja ahora</p></div>' + medidor +
+    '<dl class="cv-caja__filas">' + fila('Aportado', c.contributed) + fila('Entregado', c.paidOut, 'entregado') + fila('Reservado', c.reserved, 'reservado') + fila('Libre para entregar', c.free, 'libre', true) + '</dl>' +
+    '<p class="cv-caja__nota">' + (vacia ? 'Todavía no hay plata en la caja. Cuando alguien aporte, la verás aquí.' : 'Este saldo sale del libro de aportes de Convite. La plata está en la billetera de la caja: Convite no la guarda.') + '</p></section>';
+}
+// "Así se repartiría hoy": parte de cada persona en proporción a lo que aportó (natillera)
+function vPartes(d, me, pote) {
+  var aportes = d.members.map(function (m, i) {
+    var t = d.ledger.filter(function (l) { return l.member_id === m.id && l.status === 'confirmed' && l.receive; }).reduce(function (a, l) { return a + Number(l.receive.value); }, 0);
+    return { m: m, i: i, t: t };
+  });
+  var total = aportes.reduce(function (a, x) { return a + x.t; }, 0);
+  var c = datosCaja(d, pote);
+  var en = function (n) { return pote ? fmtMonto({ value: String(Math.round(n)), assetCode: pote.assetCode, assetScale: pote.assetScale }) : ''; };
+  if (!total) return '<section class="cv-partes" aria-labelledby="t-partes"><h2 id="t-partes" class="cv-seccion__titulo">Así se repartiría hoy</h2><div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes</h3><p class="cv-vacio__texto">Cuando haya aportes confirmados, aquí verás qué parte de la caja es de cada persona.</p></div></div></section>';
+  aportes.sort(function (a, b) { return b.t - a.t; });
+  return '<section class="cv-partes" aria-labelledby="t-partes"><h2 id="t-partes" class="cv-seccion__titulo">Así se repartiría hoy</h2><ul class="cv-partes__lista">' + aportes.filter(function (x) { return x.t > 0; }).map(function (x) {
+    var p = x.t / total * 100, soy = x.m.id === me.id, parte = c.balance * x.t / total;
+    return '<li class="cv-partes__fila' + (soy ? ' cv-partes__fila--yo' : '') + '">' + avatar(x.m, x.i, ' cv-avatar--sm' + (soy ? ' cv-avatar--yo' : '')) + '<span class="cv-partes__nombre">' + esc(x.m.name) + (soy ? ' (tú)' : '') + '</span><span class="cv-partes__pct">' + Math.round(p) + ' %</span>' +
+      '<div class="cv-partes__barra"><div class="cv-parte__pista" role="meter" aria-label="Parte de ' + esc(x.m.name) + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(p) + '" aria-valuetext="' + esc(x.m.name) + ': ' + Math.round(p) + ' de cada 100 de la caja' + (pote ? ', ' + esc(en(parte)) : '') + '"><span class="cv-parte__relleno" style="width:' + p.toFixed(1) + '%"></span></div>' +
+      '<span class="cv-partes__monto">' + (soy ? 'Te tocaría ' : 'Le tocaría ') + esc(en(parte)) + '</span></div></li>';
+  }).join('') + '</ul><p class="cv-nota cv-texto-suave">Es una estimación: el reparto real se hace al cierre.</p></section>';
+}
 function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
   var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
-  var cuenta = vCuenta(d, me, pote);
+  var cuenta = vCuenta(d, me, pote) + (c.kind === 'natillera' ? vPartes(d, me, pote) : '');
+  var caja = vCaja(d, pote);
   var agregarPersonas = '<section class="cv-tarjeta" aria-labelledby="t-agr"><h2 id="t-agr" class="cv-tarjeta__titulo">¿Eres nueva persona?</h2><p class="cv-tarjeta__cuerpo" style="margin:6px 0 14px">Crea tu usuario con tu billetera de prueba para aportar desde la tuya.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear mi usuario</button></section>';
   var pendienteYo = d.ledger.some(function (l) { return l.member_id === me.id && l.round === c.round && l.status === 'pending'; });
 
@@ -297,7 +345,7 @@ function vInicio() {
     '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
 
   return '<main class="cv-contenido" id="principal" data-tab="' + S.tab + '"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p><button type="button" class="cv-enlace" data-accion="circulos" style="padding-left:0">Cambiar de círculo o crear otro</button></div>' +
-    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', reputacion) + sec('inicio', agregarPersonas) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
+    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', caja) + sec('inicio', reputacion) + sec('inicio', agregarPersonas) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
 }
 
 function vResumen() {
@@ -399,7 +447,7 @@ function vAgregar() {
       '<p class="cv-campo__ayuda" id="' + id + '-ayuda">' + ayuda + '</p>' +
       '<div class="cv-campo__control"><input class="cv-campo__entrada" id="' + id + '" name="' + id + '" type="text" value="' + esc(valor || '') + '" autocomplete="off" autocapitalize="off" spellcheck="false" ' + (extra || '') +
       ' aria-describedby="' + id + '-ayuda' + (err[id] ? ' ' + id + '-error' : '') + '"' + (err[id] ? ' aria-invalid="true"' : '') + '></div>' +
-      (err[id] ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + esc(err[id]) + '</p>' : '') + '</div>';
+      (err[id] ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(err[id]) + '</span></p>' : '') + '</div>';
   };
   return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Crear mi usuario</h1><p class="cv-texto-suave" style="margin-top:4px">Entra al círculo con tu nombre y tu propia billetera de prueba. Cada quien autoriza sus pagos desde la suya.</p></div>' +
     '<form id="form-miembro" class="cv-tarjeta" style="display:grid;gap:20px" novalidate>' +
@@ -432,56 +480,72 @@ function guardarMiembro(e) {
     render(false); var p = $(enNombre ? 'nombre' : 'billetera'); if (p) p.focus();
   });
 }
-var TIPOS = [['natillera', 'Natillera'], ['cadena', 'Cadena'], ['circulo', 'Círculo solidario']];
+// Cuando el backend v2 acepte aportes libres (docs/contrato-api-v2.md) se pone en true: el monto fijo solo se pide en cadena.
+var APORTE_LIBRE = false;
+var TIPOS = [
+  ['cadena', 'Cadena', 'Todos aportan lo mismo cada ronda y, por turnos, una persona recibe toda la caja.', 'El mismo monto fijo, cada ronda.', 'La caja completa, cuando te toque.'],
+  ['natillera', 'Natillera', 'Cada quien aporta lo que quiera y la plata se queda en la caja hasta el cierre.', 'Lo que quieras, cuando quieras.', 'Al cierre, en proporción a lo que aportaste.'],
+  ['circulo', 'Círculo solidario', 'Aportan lo que quieran y cualquiera puede pedir una ayuda que el grupo aprueba.', 'Lo que quieras, cuando quieras.', 'Una ayuda, si la pides y el grupo la aprueba.']
+];
 function etiquetaTipo(k) { var t = TIPOS.find(function (x) { return x[0] === k; }); return t ? t[1] : k; }
+function iconoTipo(k) { return ico(k === 'cadena' ? 't_cadena' : k === 'natillera' ? 't_natillera' : 't_circulo', 'cv-icono--xs'); }
 function vCirculos() {
   var cs = S.circulos || [];
-  var lista = cs.length ? '<ul style="display:grid;gap:12px">' + cs.map(function (c) {
+  var cuerpo = cs.length ? '<ul class="cv-circulos" aria-label="Tus círculos">' + cs.map(function (c) {
     var n = c.members != null ? c.members : (c.memberCount != null ? c.memberCount : null);
-    return '<li><a class="cv-tarjeta cv-tarjeta--interactiva app__circulo" href="/?circle=' + encodeURIComponent(c.id) + '"><span><span class="cv-tarjeta__titulo" style="display:block">' + esc(c.name) + '</span>' +
-      '<span class="cv-texto-suave">' + esc(etiquetaTipo(c.kind)) + (n != null ? ' · ' + n + (n === 1 ? ' miembro' : ' miembros') : '') + ' · Ronda ' + esc(c.round) + '</span></span>' + ico('flecha') + '</a></li>';
+    return '<li><button type="button" class="cv-circulo" data-accion="abrir-circulo" data-id="' + esc(c.id) + '"><span class="cv-circulo__nombre">' + esc(c.name) + '</span><span class="cv-circulo__flecha">' + ico('der') + '</span>' +
+      '<span class="cv-circulo__datos"><span class="cv-tipo-chip">' + iconoTipo(c.kind) + esc(etiquetaTipo(c.kind)) + '</span>' +
+      (n != null ? '<span class="cv-circulo__dato">' + ico('personas', 'cv-icono--xs') + n + (n === 1 ? ' miembro' : ' miembros') + '</span>' : '') +
+      '<span class="cv-circulo__dato">' + ico('refrescar', 'cv-icono--xs') + 'Ronda ' + esc(c.round) + '</span></span></button></li>';
   }).join('') + '</ul>' : '<div class="cv-tarjeta"><div class="cv-vacio"><h2 class="cv-vacio__titulo">Todavía no hay círculos</h2><p class="cv-vacio__texto">Crea el primero y suma a las personas que ya conoces.</p></div></div>';
-  return '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Tus círculos</h1><p class="cv-texto-suave" style="margin-top:4px">Elige uno para ver el libro y pagar tu aporte, o crea uno nuevo.</p></div>' + lista +
-    '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="crear-circulo">' + ico('personas', 'cv-icono--sm') + 'Crear un círculo</button>' +
+  return '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Tus círculos</h1><p class="cv-texto-suave" style="margin-top:4px">Elige uno para entrar.</p></div>' + cuerpo +
+    '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="crear-circulo">' + ico('mas', 'cv-icono--sm') + 'Crear un círculo</button>' +
     '<p class="cv-nota cv-texto-suave">Cada persona elige quién es dentro de cada círculo, así que puedes estar en varios con billeteras distintas.</p></main>';
 }
 function campoHtml(id, etiqueta, ayuda, valor, extra, err) {
   return '<div class="cv-campo' + (err ? ' cv-campo--error' : '') + '"><label class="cv-campo__etiqueta" for="' + id + '">' + etiqueta + '</label><p class="cv-campo__ayuda" id="' + id + '-ayuda">' + ayuda + '</p>' +
     '<div class="cv-campo__control"><input class="cv-campo__entrada" id="' + id + '" name="' + id + '" type="text" value="' + esc(valor || '') + '" autocomplete="off" autocapitalize="off" spellcheck="false" ' + (extra || '') +
     ' aria-describedby="' + id + '-ayuda' + (err ? ' ' + id + '-error' : '') + '"' + (err ? ' aria-invalid="true"' : '') + '></div>' +
-    (err ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + esc(err) + '</p>' : '') + '</div>';
+    (err ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(err) + '</span></p>' : '') + '</div>';
 }
 function vCrear() {
   var f = S.formC || { tipo: 'natillera', aprob: '2' }, err = S.formCError || {};
-  var opc = function (arr, sel) { return arr.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(sel) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join(''); };
+  var tipos = '<fieldset class="cv-tipos"><legend class="cv-tipos__leyenda">Tipo de círculo</legend>' + TIPOS.map(function (t) {
+    return '<label class="cv-tipo"><input type="radio" class="cv-tipo__radio" name="c-tipo" value="' + t[0] + '"' + (f.tipo === t[0] ? ' checked' : '') + '><span class="cv-tipo__icono">' + ico(t[0] === 'cadena' ? 't_cadena' : t[0] === 'natillera' ? 't_natillera' : 't_circulo') + '</span>' +
+      '<span class="cv-tipo__cuerpo"><span class="cv-tipo__nombre">' + esc(t[1]) + '<span class="cv-tipo__elegido">' + ico('check', 'cv-icono--xs') + 'Elegido</span></span><span class="cv-tipo__frase">' + esc(t[2]) + '</span>' +
+      '<span class="cv-tipo__reglas"><span class="cv-tipo__regla"><strong>Aportas:</strong> ' + esc(t[3]) + '</span><span class="cv-tipo__regla"><strong>Recibes:</strong> ' + esc(t[4]) + '</span></span></span><span class="cv-tipo__marca">' + ico('check') + '</span></label>';
+  }).join('') + '</fieldset>';
+  var pideMonto = f.tipo === 'cadena' || !APORTE_LIBRE;
+  var ayudaMonto = f.tipo === 'cadena' ? 'Todas las personas aportan lo mismo cada ronda. En la moneda de la billetera de la caja. Por ejemplo: 10' : 'Por ahora todas las personas aportan este monto. En la moneda de la billetera de la caja. Por ejemplo: 10';
   var sel = function (id, etiqueta, ayuda, opciones, valor) {
-    return '<div class="cv-campo"><label class="cv-campo__etiqueta" for="' + id + '">' + etiqueta + '</label><p class="cv-campo__ayuda" id="' + id + '-ayuda">' + ayuda + '</p><div class="cv-campo__control"><select class="cv-campo__entrada" id="' + id + '" aria-describedby="' + id + '-ayuda">' + opc(opciones, valor) + '</select></div></div>';
+    return '<div class="cv-campo"><label class="cv-campo__etiqueta" for="' + id + '">' + etiqueta + '</label><p class="cv-campo__ayuda" id="' + id + '-ayuda">' + ayuda + '</p><div class="cv-campo__control"><select class="cv-campo__entrada" id="' + id + '" aria-describedby="' + id + '-ayuda">' +
+      opciones.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(valor) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></div></div>';
   };
-  return barraVolver(true, 'circulos') + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Crear un círculo</h1><p class="cv-texto-suave" style="margin-top:4px">Define cuánto aporta cada quien y a qué billetera llega. Después sumas a las personas con su propia billetera.</p></div>' +
-    '<form id="form-circulo" class="cv-tarjeta" style="display:grid;gap:20px" novalidate>' +
-    campoHtml('c-nombre', 'Nombre del círculo', 'Por ejemplo: Natillera de la familia.', f.nombre, 'maxlength="60"', err.nombre) +
-    sel('c-tipo', 'Tipo', 'Natillera y cadena: la caja se entrega por turnos. Círculo solidario: cualquiera pide una entrega y el grupo la aprueba.', TIPOS, f.tipo) +
+  return barraVolver(true, 'circulos') + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Crea tu círculo</h1><p class="cv-texto-suave" style="margin-top:4px">Lo demás lo completan las personas al unirse.</p></div>' +
+    '<form id="form-circulo" class="cv-formulario" style="display:grid;gap:20px" novalidate>' +
+    campoHtml('c-nombre', 'Nombre del círculo', 'Así lo verán todos los miembros. Por ejemplo: Los Vecinos.', f.nombre, 'maxlength="60"', err.nombre) + tipos +
     campoHtml('c-billetera', 'Billetera de la caja', 'Es la billetera de prueba que recibe los aportes. Por ejemplo: $ilp.interledger-test.dev/caja-familia', f.billetera, 'inputmode="url"', err.billetera) +
-    campoHtml('c-monto', 'Aporte por ronda', 'Cuánto aporta cada persona, en la moneda de la billetera de la caja. Por ejemplo: 10', f.monto, 'inputmode="decimal"', err.monto) +
+    (pideMonto ? campoHtml('c-monto', 'Aporte por ronda', ayudaMonto, f.monto, 'inputmode="decimal"', err.monto) : '') +
     sel('c-aprob', 'Aprobaciones para entregar la caja', 'Cuántas personas deben aprobar cada entrega.', [['1', '1 aprobación'], ['2', '2 aprobaciones'], ['3', '3 aprobaciones'], ['4', '4 aprobaciones']], f.aprob) +
-    (err.general ? '<p class="cv-campo__error" role="alert">' + esc(err.general) + '</p>' : '') +
-    '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (S.ocupado ? CARGADOR + 'Revisando la billetera…' : 'Crear el círculo') + '</button>' +
+    (err.general ? '<p class="cv-campo__error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(err.general) + '</span></p>' : '') +
+    '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (S.ocupado ? CARGADOR + 'Revisando la billetera…' : ico('mas', 'cv-icono--sm') + 'Crear círculo') + '</button>' +
     '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="circulos">Cancelar</button></div></form></main>';
 }
 function guardarCirculo(e) {
   e.preventDefault();
   if (S.ocupado) return;
-  var f = { nombre: $('c-nombre').value.trim(), tipo: $('c-tipo').value, billetera: $('c-billetera').value.trim(), monto: $('c-monto').value.trim().replace(',', '.'), aprob: $('c-aprob').value }, err = {};
+  var radio = document.querySelector('input[name="c-tipo"]:checked'), campoMonto = $('c-monto');
+  var f = { nombre: $('c-nombre').value.trim(), tipo: radio ? radio.value : 'natillera', billetera: $('c-billetera').value.trim(), monto: campoMonto ? campoMonto.value.trim().replace(',', '.') : '', aprob: $('c-aprob').value }, err = {};
   S.formC = f;
   if (!f.nombre) err.nombre = 'Ponle un nombre para reconocerlo.';
   if (!f.billetera) err.billetera = 'Pega la dirección de la billetera de la caja.';
   else if (!/^(\$|https:\/\/)[\w.-]+\.[a-z]{2,}(\/[\w.~%-]+)+$/i.test(f.billetera)) err.billetera = 'Se ve incompleta. Debe parecerse a $ilp.interledger-test.dev/caja.';
-  if (!/^\d+(\.\d{1,6})?$/.test(f.monto) || Number(f.monto) <= 0) err.monto = 'Escribe solo números mayores que cero, por ejemplo 10.';
+  if (campoMonto && (!/^\d+(\.\d{1,6})?$/.test(f.monto) || Number(f.monto) <= 0)) err.monto = 'Escribe solo números mayores que cero, por ejemplo 10.';
   S.formCError = err;
   var primero = ['nombre', 'billetera', 'monto'].find(function (k) { return err[k]; });
   if (primero) { render(false); var el = $({ nombre: 'c-nombre', billetera: 'c-billetera', monto: 'c-monto' }[primero]); if (el) el.focus(); return; }
   S.ocupado = true; render(false);
-  post('/api/circles', { name: f.nombre, kind: f.tipo, pot_wallet: f.billetera, amount: f.monto, min_approvals: Number(f.aprob) }).then(function (r) {
+  post('/api/circles', Object.assign({ name: f.nombre, kind: f.tipo, pot_wallet: f.billetera, min_approvals: Number(f.aprob) }, campoMonto ? { amount: f.monto } : {})).then(function (r) {
     var c = r.circle || r; S.ocupado = false; S.formC = null; S.formCError = null;
     location.assign('/?circle=' + encodeURIComponent(c.id));
   }).catch(function (er) {
@@ -507,13 +571,12 @@ function vQuien() {
   var lista = d.members.map(function (m, i) {
     return '<li><button type="button" class="cv-fila cv-fila--interactiva" data-accion="soy" data-id="' + m.id + '" aria-label="Soy ' + esc(m.name) + '">' + avatar(m, i) +
       '<span class="cv-fila__texto"><span class="cv-fila__quien">' + esc(m.name) + '</span><span class="cv-fila__cuando">' + esc(m.assetCode ? 'Billetera en ' + m.assetCode : (PAISES[m.country] || m.country)) + '</span></span>' +
-      '<span class="cv-fila__valor"><span class="cv-fila__ver">Soy yo</span></span></button></li>';
+      '<span class="cv-fila__valor"><span class="cv-circulo__flecha">' + ico('der') + '</span></span></button></li>';
   }).join('');
-  return '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">¿Quién eres en este círculo?</h1><p class="cv-texto-suave" style="margin-top:4px">' + esc(d.circle.name) + '. Elige tu nombre o crea tu usuario con tu propia billetera de prueba.</p></div>' +
+  return barraVolver(true, 'circulos').replace('Atrás', 'Mis círculos') + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">¿Quién eres en este círculo?</h1><p class="cv-texto-suave" style="margin-top:4px">' + esc(d.circle.name) + ' · elige tu nombre.</p></div>' +
     '<ul class="cv-libro" aria-label="Personas del círculo">' + lista + '</ul>' +
-    '<div class="cv-tarjeta" style="display:grid;gap:12px"><h2 class="cv-tarjeta__titulo">¿No estás en la lista?</h2><p class="cv-texto-suave">Crea tu usuario con tu nombre y la dirección de tu billetera de prueba. Cada quien autoriza sus pagos desde la suya.</p>' +
-    '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear mi usuario</button></div>' +
-    '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="circulos">Ver todos mis círculos</button></main>';
+    '<section class="cv-tarjeta cv-tarjeta--plana" aria-labelledby="t-nl"><h2 id="t-nl" class="cv-tarjeta__titulo">¿No estás en la lista?</h2><p class="cv-texto-suave" style="margin:4px 0 14px">Crea tu usuario con tu nombre y la dirección de tu billetera.</p>' +
+    '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('mas', 'cv-icono--sm') + 'Crear mi usuario</button></section></main>';
 }
 function vFalloCarga() {
   return '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No pudimos cargar tu círculo</h1><p class="cv-vacio__texto">' + esc(S.errorCarga || 'Revisa tu conexión e intenta de nuevo.') + '</p><button type="button" class="cv-btn cv-btn--primario" data-accion="recargar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button></div></main>';
@@ -642,6 +705,7 @@ document.addEventListener('click', function (e) {
   else if (acc === 'inicio') { if (S.view === 'resumen' || S.view === 'pago2') olvidarPend(); S.pago = null; ir('inicio'); cargar(); }
   else if (acc === 'ver-libro') { S.tab = 'libro'; ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   else if (acc === 'soy') { guardar('convite.yo.' + circleId, a.dataset.id); S.me = null; ir('inicio'); anunciar('Ahora ves el círculo como ' + (S.me ? S.me.name : '')); }
+  else if (acc === 'abrir-circulo') location.assign('/?circle=' + encodeURIComponent(a.dataset.id));
   else if (acc === 'circulos') location.assign('/?lista=1');
   else if (acc === 'crear-circulo') { S.formC = null; S.formCError = null; ir('crear'); }
   else if (acc === 'agregar-miembro') { S.form = null; S.formError = null; ir('agregar'); }
@@ -659,6 +723,9 @@ document.addEventListener('click', function (e) {
   else if (acc === 'pedir-entrega') pedirEntrega();
   else if (acc === 'recargar') { S.view = 'cargando'; render(false); cargar(); }
   else if (acc === 'tema') { var t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; guardar('convite.tema', t); temaIcono(); }
+});
+document.addEventListener('change', function (e) {
+  if (e.target.name === 'c-tipo' && S.view === 'crear') { var g = function (id) { var el = $(id); return el ? el.value : ''; }; S.formC = { nombre: g('c-nombre').trim(), tipo: e.target.value, billetera: g('c-billetera').trim(), monto: g('c-monto'), aprob: g('c-aprob') || '2' }; render(false); var r = document.querySelector('input[name="c-tipo"]:checked'); if (r) r.focus(); }
 });
 document.addEventListener('submit', function (e) { if (e.target.id === 'form-miembro') guardarMiembro(e); else if (e.target.id === 'form-circulo') guardarCirculo(e); });
 document.addEventListener('keydown', function (e) {
