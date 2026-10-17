@@ -62,6 +62,7 @@ var ICONOS = {
   refrescar: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>',
   externo: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
   abajo: '<path d="M6 9l6 6 6-6"/>',
+  cuenta: '<circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/>',
   casa: '<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
   entregas: '<circle cx="9" cy="9" r="5.5"/><path d="M14.5 9.8A5.5 5.5 0 1 1 9.8 14.5"/>',
   sol: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
@@ -173,15 +174,49 @@ function sec(n, html) { return '<div data-seccion="' + n + '" style="display:con
 // Navegación inferior (solo móvil; en escritorio todo se ve junto)
 function navInferior(d, me) {
   var porAprobar = d.payouts.filter(function (p) { return p.status !== 'approved' && p.approvedBy.length < d.circle.min_approvals && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0; }).length;
-  var items = [['inicio', 'Inicio', 'casa'], ['libro', 'Libro', 'libro'], ['miembros', 'Miembros', 'personas'], ['entregas', 'Entregas', 'entregas']];
-  return '<nav class="cv-nav cv-nav--cuatro" aria-label="Principal">' + items.map(function (it) {
+  var items = [['inicio', 'Inicio', 'casa'], ['libro', 'Libro', 'libro'], ['miembros', 'Miembros', 'personas'], ['entregas', 'Entregas', 'entregas'], ['cuenta', 'Cuenta', 'cuenta']];
+  return '<nav class="cv-nav" aria-label="Principal">' + items.map(function (it) {
     return '<button type="button" class="cv-nav__item" data-accion="tab" data-tab="' + it[0] + '"' + (S.tab === it[0] ? ' aria-current="page"' : '') + '>' + ico(it[2]) +
       '<span>' + it[1] + (it[0] === 'entregas' && porAprobar ? ' <span class="app__punto" aria-hidden="true">' + porAprobar + '</span><span class="cv-sr">(' + porAprobar + ' por aprobar)</span>' : '') + '</span></button>';
   }).join('') + '</nav>';
 }
+function vCuenta(d, me, pote) {
+  var mios = d.ledger.filter(function (l) { return l.member_id === me.id; });
+  var suma = function (ls) { return ls.reduce(function (t, l) { return t + (l.receive ? Number(l.receive.value) : 0); }, 0); };
+  var total = suma(d.ledger.filter(function (l) { return l.status === 'confirmed'; }));
+  var mio = suma(mios.filter(function (l) { return l.status === 'confirmed'; }));
+  var recibido = d.payouts.filter(function (p) { return p.member_id === me.id && p.status === 'approved'; }).reduce(function (t, p) { return t + Number(p.amount); }, 0);
+  var en = function (n) { return pote ? fmtMonto({ value: String(n), assetCode: pote.assetCode, assetScale: pote.assetScale }) : '—'; };
+  var pct = total ? Math.round(mio / total * 100) : 0;
+  var filas = '';
+  if (!me.hasContributed) {
+    var monto = pote ? en(d.circle.contribution) : null;
+    filas += '<li><div class="cv-fila">' + avatar(me, indiceMiembro(me.id)) + '<div class="cv-fila__texto"><div class="cv-fila__quien">Ronda ' + d.circle.round + '</div><div class="cv-fila__cuando">Ronda actual</div><span class="cv-chip">' + ico('billetera', 'cv-icono--xs') + 'Falta tu aporte</span></div>' +
+      (monto ? '<div class="cv-fila__valor"><span class="cv-fila__monto cv-monto">' + esc(monto) + '</span></div>' : '') + '</div></li>';
+  }
+  var ESTADO = { confirmed: ['confirmado', 'check', 'Confirmado'], pending: ['espera', 'reloj', 'Esperando autorización'], failed: ['fallo', 'alerta', 'Falló'] };
+  filas += mios.map(function (l) {
+    var e = ESTADO[l.status] || ESTADO.pending, abre = l.status === 'confirmed', deb = fmtMonto(l.debit), rec = fmtMonto(l.receive);
+    var cuando = [fmtFecha(l.confirmedAt || l.created_at)];
+    if (abre && deb && l.debit && l.receive && l.debit.assetCode !== l.receive.assetCode) cuando.push('pagaste ' + deb);
+    var cont = avatar(me, indiceMiembro(me.id)) + '<div class="cv-fila__texto"><div class="cv-fila__quien">Ronda ' + l.round + '</div><div class="cv-fila__cuando">' + esc(cuando.filter(Boolean).join(' · ')) + '</div><span class="cv-chip cv-chip--' + e[0] + '">' + ico(e[1], 'cv-icono--xs') + e[2] + '</span></div>' +
+      '<div class="cv-fila__valor">' + (rec ? '<span class="cv-fila__monto cv-monto">' + esc(rec) + '</span>' : '') + (abre ? '<span class="cv-fila__ver">Ver comprobante</span>' : '') + '</div>';
+    return '<li>' + (abre ? '<button type="button" class="cv-fila cv-fila--interactiva" data-accion="comprobante" data-id="' + l.id + '" aria-label="Ver el comprobante de la ronda ' + l.round + '">' + cont + '</button>' : '<div class="cv-fila">' + cont + '</div>') + '</li>';
+  }).join('');
+  return '<section class="cv-tarjeta cv-mio" aria-labelledby="t-mio"><h2 id="t-mio" class="cv-tarjeta__titulo">Tu plata en el círculo</h2>' +
+    '<div class="cv-mio__par"><div class="cv-mio__dato"><span class="cv-mio__etiqueta">Has aportado</span><span class="cv-monto-medio">' + esc(en(mio)) + '</span></div>' +
+    '<div class="cv-mio__dato"><span class="cv-mio__etiqueta">Entregas aprobadas para ti</span><span class="cv-monto-medio">' + esc(en(recibido)) + '</span></div></div>' +
+    '<div class="cv-parte"><div class="cv-parte__cabecera"><span class="cv-mio__etiqueta">Tu parte de la caja</span><span class="cv-monto-medio">' + pct + ' %</span></div>' +
+    '<div class="cv-parte__pista" role="meter" aria-label="Tu parte de la caja" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-valuetext="' + pct + ' de cada 100 de la caja"><span class="cv-parte__relleno" style="width:' + pct + '%"></span></div>' +
+    '<p class="cv-texto-suave cv-nota">' + (pote ? esc(en(mio)) + ' de los ' + esc(en(total)) + ' que han aportado entre todos.' : 'Cuando haya aportes confirmados verás aquí tu parte.') + '</p></div>' +
+    '<p class="cv-nota cv-texto-suave">Una entrega aprobada todavía no mueve dinero: el envío real es un siguiente paso del proyecto.</p></section>' +
+    '<section class="cv-seccion" aria-labelledby="s-comp"><div class="cv-seccion__cabecera"><h2 id="s-comp" class="cv-seccion__titulo">Mis comprobantes</h2></div>' +
+    (filas ? '<ul class="cv-libro" aria-label="Mis aportes">' + filas + '</ul>' : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes tuyos</h3><p class="cv-vacio__texto">Cuando pagues, tu comprobante aparecerá aquí.</p></div></div>') + '</section>';
+}
 function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
   var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
+  var cuenta = vCuenta(d, me, pote);
   var pendienteYo = d.ledger.some(function (l) { return l.member_id === me.id && l.round === c.round && l.status === 'pending'; });
 
   var selector = '<div class="cv-vista"><button type="button" class="cv-vista__boton" id="vista-boton" data-accion="vista-abrir" aria-haspopup="listbox" aria-expanded="false">' +
@@ -255,7 +290,7 @@ function vInicio() {
     '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
 
   return '<main class="cv-contenido" id="principal" data-tab="' + S.tab + '"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p></div>' +
-    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', reputacion) + sec('miembros', miembros) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
+    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', reputacion) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
 }
 
 function vResumen() {
@@ -476,7 +511,7 @@ document.addEventListener('click', function (e) {
   else if (acc === 'continuar') continuar();
   else if (acc === 'inicio') { if (S.view === 'resumen' || S.view === 'pago2') olvidarPend(); S.pago = null; ir('inicio'); cargar(); }
   else if (acc === 'ver-libro') { S.tab = 'libro'; ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-  else if (acc === 'tab') { S.tab = a.dataset.tab; render(false); window.scrollTo(0, 0); anunciar('Sección ' + a.innerText.trim().split('\n')[0]); var nb = document.querySelector('.cv-nav [aria-current="page"]'); if (nb) nb.focus(); }
+  else if (acc === 'tab') { S.tab = a.dataset.tab; render(false); window.scrollTo(0, 0); anunciar('Sección ' + a.innerText.trim().split('\n')[0]); var nb = document.querySelector('.cv-nav [aria-current="page"]'); if (nb) nb.focus({ preventScroll: true }); window.scrollTo(0, 0); }
   else if (acc === 'comprobante') { S.compId = Number(a.dataset.id); ir('comprobante'); }
   else if (acc === 'imprimir') { // el PDF siempre sale en claro, aunque la pantalla esté en oscuro
     var tema = document.documentElement.dataset.theme; document.documentElement.dataset.theme = 'light';

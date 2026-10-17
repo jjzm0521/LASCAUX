@@ -51,7 +51,8 @@ button.cv-fila { width: 100%; border: 0; border-bottom: var(--borde-fino) solid 
   [data-tab="inicio"] [data-seccion]:not([data-seccion="inicio"]),
   [data-tab="libro"] [data-seccion]:not([data-seccion="libro"]),
   [data-tab="miembros"] [data-seccion]:not([data-seccion="miembros"]),
-  [data-tab="entregas"] [data-seccion]:not([data-seccion="entregas"]) { display: none !important; }
+  [data-tab="entregas"] [data-seccion]:not([data-seccion="entregas"]),
+  [data-tab="cuenta"] [data-seccion]:not([data-seccion="cuenta"]) { display: none !important; }
 }
 @media (min-width: 62rem) { .app .cv-nav { display: none; } }
 
