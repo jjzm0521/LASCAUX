@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS contributions (
   status TEXT NOT NULL DEFAULT 'pending',    -- pending | processing | confirmed | failed
   pending_json TEXT,
   outgoing_id TEXT,
+  confirmed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS payouts (
@@ -55,7 +56,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 // Migración ligera para bases circulos.db ya creadas antes de agregar columnas nuevas
 const contribCols = db.prepare('PRAGMA table_info(contributions)').all() as { name: string }[];
-for (const col of ['receive_json', 'expires_at', 'error_msg']) {
+for (const col of ['receive_json', 'expires_at', 'error_msg', 'confirmed_at']) {
   if (!contribCols.some((c) => c.name === col)) {
     db.exec(`ALTER TABLE contributions ADD COLUMN ${col} TEXT`);
   }

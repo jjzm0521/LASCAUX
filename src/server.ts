@@ -82,7 +82,7 @@ app.get('/api/circles/:id', (req, res) => {
     canRequestPayout: !hasRoundPayout && (circle.kind === 'circulo' || m.turn === currentTurn),
   }));
 
-  const rawLedger = db.prepare(`SELECT c.id, c.member_id, m.name, m.country, c.round, c.receive_value, c.debit_json, c.receive_json, c.pending_json, c.status, c.created_at
+  const rawLedger = db.prepare(`SELECT c.id, c.member_id, m.name, m.country, c.round, c.receive_value, c.debit_json, c.receive_json, c.pending_json, c.outgoing_id, c.confirmed_at, c.status, c.created_at
     FROM contributions c JOIN members m ON m.id=c.member_id WHERE c.circle_id=? ORDER BY c.id DESC`).all(id) as any[];
 
   const ledger = rawLedger.map((r) => {
@@ -102,6 +102,8 @@ app.get('/api/circles/:id', (req, res) => {
       receive_value: r.receive_value,
       debit,
       receive,
+      outgoingId: r.outgoing_id ?? null,
+      confirmedAt: r.confirmed_at ?? null,
       status: r.status === 'processing' ? 'pending' : r.status,
       created_at: r.created_at,
     };
@@ -119,7 +121,7 @@ app.get('/api/circles/:id', (req, res) => {
   res.json({ circle: { ...circle, currentTurn }, members, ledger, payouts, reputation: reputation(id) });
 });
 
-// Estado individual de un aporte para el stepper de la interfaz
+// Estado individual de un aporte para el stepper y comprobante de la interfaz
 app.get('/api/contributions/:id', (req, res) => {
   const id = Number(req.params.id);
   const initial = db.prepare('SELECT circle_id FROM contributions WHERE id=?').get(id) as { circle_id: number } | undefined;
@@ -148,6 +150,8 @@ app.get('/api/contributions/:id', (req, res) => {
     expiresAt,
     debit,
     receive,
+    outgoingId: row.outgoing_id ?? null,
+    confirmedAt: row.confirmed_at ?? null,
   };
   if (row.error_msg) out.error = row.error_msg;
   res.json(out);
@@ -235,7 +239,7 @@ app.get('/api/contributions/:id/finish', async (req, res) => {
       hash: String(req.query.hash),
     });
     db.prepare(
-      "UPDATE contributions SET status='confirmed', outgoing_id=?, pending_json=NULL, error_msg=NULL WHERE id=? AND status='processing'",
+      "UPDATE contributions SET status='confirmed', outgoing_id=?, confirmed_at=datetime('now'), pending_json=NULL, error_msg=NULL WHERE id=? AND status='processing'",
     ).run(outgoing.id, id);
     res.redirect(`/?circle=${row.circle_id}&ok=1`);
   } catch (e: any) {
