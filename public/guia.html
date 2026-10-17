@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guía de diseño · Convite</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="app.css">
+<style>
+  .g { max-width: 56rem; margin: 0 auto; padding: var(--espacio-6) var(--espacio-4) var(--espacio-16); display: grid; gap: var(--espacio-10); }
+  .g section { display: grid; gap: var(--espacio-4); }
+  .g-malla { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: var(--espacio-3); }
+  .g-muestra { border: var(--borde-fino) solid var(--color-borde); border-radius: var(--radio-md); overflow: hidden; background: var(--color-superficie); }
+  .g-muestra i { display: block; height: 3.5rem; border-bottom: var(--borde-fino) solid var(--color-borde); }
+  .g-muestra b, .g-muestra code { display: block; padding: 0 var(--espacio-2); font-size: var(--tamano-nota); line-height: var(--interlineado-nota); }
+  .g-muestra b { padding-top: var(--espacio-2); }
+  .g-muestra code { padding-bottom: var(--espacio-2); color: var(--color-texto-suave); word-break: break-all; }
+  .g-fila { display: flex; flex-wrap: wrap; gap: var(--espacio-3); align-items: center; }
+  .g-caja { background: var(--color-superficie); border: var(--borde-fino) solid var(--color-borde); border-radius: var(--radio-lg); padding: var(--espacio-4); display: grid; gap: var(--espacio-4); }
+  code { font-size: .9em; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: var(--espacio-2) var(--espacio-3); border-bottom: var(--borde-fino) solid var(--color-borde); vertical-align: top; }
+</style>
+<script>
+  (function () {
+    var t = null; try { t = localStorage.getItem('convite.tema'); } catch (e) {}
+    if (!t) t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body class="cv-raiz">
+<div class="g">
+  <header style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap">
+    <div>
+      <h1 class="cv-titulo-1">Guía de diseño de Convite</h1>
+      <p class="cv-texto-suave" style="max-width:40rem">Fuente de verdad visual del equipo. Todo sale de <code>tokens.css</code> y <code>components.css</code>; esta página se pinta con esos mismos archivos, así que nunca se desactualiza.</p>
+    </div>
+    <button type="button" class="cv-btn cv-btn--secundario cv-btn--compacto" id="tema">Cambiar tema</button>
+  </header>
+
+  <section aria-labelledby="g-reglas">
+    <h2 id="g-reglas" class="cv-titulo-2">Reglas que mandan</h2>
+    <ul style="display:grid;gap:8px;padding-left:20px;list-style:disc">
+      <li>Un solo botón primario por pantalla.</li>
+      <li>Nunca solo color: todo estado lleva ícono y palabra.</li>
+      <li>Ningún color, tamaño ni espacio suelto: solo variables (<code>var(--color-primario)</code>, <code>var(--espacio-4)</code>…).</li>
+      <li>Voz de «tú», frases cortas: aporte, caja común, libro, entrega, billetera. Sin «desembolso», «wallet», «ledger».</li>
+      <li>Cada mensaje dice qué pasó, si se cobró algo y qué hacer. Solo se dice «no se te cobró nada» si es cierto.</li>
+      <li>Montos con moneda y escala de la API: <code>COP 50.000</code>, <code>USD 12,35</code>. Nunca se suponen.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="g-color">
+    <h2 id="g-color" class="cv-titulo-2">Color semántico</h2>
+    <p class="cv-texto-suave">Los mismos nombres en claro y oscuro. Cambia el tema arriba para verlos.</p>
+    <div class="g-malla" id="colores"></div>
+  </section>
+
+  <section aria-labelledby="g-paleta">
+    <h2 id="g-paleta" class="cv-titulo-2">Paleta cruda</h2>
+    <div class="g-malla" id="paleta"></div>
+  </section>
+
+  <section aria-labelledby="g-tipo">
+    <h2 id="g-tipo" class="cv-titulo-2">Tipografía · Figtree</h2>
+    <div class="g-caja">
+      <p class="cv-titulo-1">Título 1 · Círculo Los Vecinos</p>
+      <p class="cv-titulo-2">Título 2 · Libro de aportes</p>
+      <p class="cv-titulo-3">Título 3 · Entrega a Jairo</p>
+      <p>Cuerpo 18px · Paga tu aporte y todos lo verán en el libro.</p>
+      <p class="cv-nota">Nota 14px · apoyo, chips y detalles (el mínimo del sistema).</p>
+      <p class="cv-monto-grande">COP 50.000</p>
+      <p class="cv-monto">USD 12,35 · cifras tabulares, se alinean en columna</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="g-esp">
+    <h2 id="g-esp" class="cv-titulo-2">Espaciado, radios y capas</h2>
+    <div class="g-malla" id="espacios"></div>
+  </section>
+
+  <section aria-labelledby="g-btn">
+    <h2 id="g-btn" class="cv-titulo-2">Botones y chips</h2>
+    <div class="g-caja">
+      <div class="g-fila">
+        <button type="button" class="cv-btn cv-btn--primario">Pagar mi aporte</button>
+        <button type="button" class="cv-btn cv-btn--secundario">Aprobar entrega</button>
+        <button type="button" class="cv-btn cv-btn--peligro">Cancelar entrega</button>
+        <button type="button" class="cv-btn cv-btn--fantasma">Ahora no</button>
+        <button type="button" class="cv-btn cv-btn--primario" disabled>Deshabilitado</button>
+        <button type="button" class="cv-btn cv-btn--primario" aria-busy="true"><svg class="cv-cargador cv-cargador--xs cv-cargador--mono" viewBox="0 0 64 64" aria-hidden="true"><circle class="m-p" cx="32" cy="11" r="7"/><circle class="m-p" cx="50.19" cy="21.5" r="7"/><circle class="m-s" cx="50.19" cy="42.5" r="7"/><circle class="m-p" cx="32" cy="53" r="7"/><circle class="m-a" cx="13.81" cy="42.5" r="7"/><circle class="m-p" cx="13.81" cy="21.5" r="7"/><circle class="m-c" cx="32" cy="32" r="4.5"/></svg>Procesando…</button>
+      </div>
+      <div class="g-fila">
+        <span class="cv-chip cv-chip--confirmado">Confirmado</span>
+        <span class="cv-chip cv-chip--espera">Esperando autorización</span>
+        <span class="cv-chip cv-chip--fallo">Falló</span>
+        <span class="cv-chip">Falta su aporte</span>
+      </div>
+      <p class="cv-nota cv-texto-suave">En la app cada chip lleva además su ícono (check, reloj, alerta); aquí se omiten para ver la forma.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="g-av">
+    <h2 id="g-av" class="cv-titulo-2">Avisos y barra de aprobaciones</h2>
+    <div class="g-caja">
+      <div class="cv-aviso cv-aviso--exito" role="status"><div><p class="cv-aviso__titulo">Aporte confirmado</p><p class="cv-aviso__texto">Ya quedó anotado en el libro.</p></div></div>
+      <div class="cv-aviso cv-aviso--error" role="status"><div><p class="cv-aviso__titulo">No pudimos completar el pago</p><p class="cv-aviso__texto">Revisa tu billetera e intenta de nuevo.</p></div></div>
+      <div class="cv-aviso cv-aviso--advertencia" role="status"><div><p class="cv-aviso__titulo">Tu cotización vence pronto</p><p class="cv-aviso__texto">Autoriza antes de la hora indicada.</p></div></div>
+      <div class="cv-aviso cv-aviso--info" role="status"><div><p class="cv-aviso__titulo">Convite no guarda tu plata</p><p class="cv-aviso__texto">El pago sale de tu billetera y llega a la caja.</p></div></div>
+      <div class="cv-progreso"><div class="cv-progreso__cabecera"><span class="cv-progreso__cifra">1 de 2</span><span class="cv-nota cv-texto-suave">aprobaciones</span></div>
+        <div class="cv-progreso__pista" role="progressbar" aria-label="Aprobaciones de la entrega" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1" aria-valuetext="1 de 2 aprobaciones"><span class="cv-progreso__tramo is-lleno"></span><span class="cv-progreso__tramo"></span></div>
+        <p class="cv-progreso__detalle">Aprobó Marta. Falta Luz Dary.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="g-sk">
+    <h2 id="g-sk" class="cv-titulo-2">Skeletons y cargador</h2>
+    <div class="g-caja" role="status" aria-busy="true">
+      <span class="cv-sr">Cargando tu círculo…</span>
+      <div class="cv-skel-fila" aria-hidden="true"><span class="cv-skel cv-skel--circulo"></span><div class="cv-skel-grupo"><span class="cv-skel cv-skel--linea cv-skel--media" style="display:block"></span><span class="cv-skel cv-skel--linea cv-skel--corta" style="display:block"></span></div><span class="cv-skel cv-skel--pastilla"></span></div>
+      <div class="cv-skel-fila" aria-hidden="true"><span class="cv-skel cv-skel--circulo"></span><div class="cv-skel-grupo"><span class="cv-skel cv-skel--linea cv-skel--media" style="display:block"></span><span class="cv-skel cv-skel--linea cv-skel--corta" style="display:block"></span></div><span class="cv-skel cv-skel--pastilla"></span></div>
+    </div>
+    <p class="cv-nota cv-texto-suave">Con <code>prefers-reduced-motion: reduce</code> el brillo se apaga. El contenedor lleva <code>aria-busy</code> y los bloques <code>aria-hidden</code>.</p>
+  </section>
+
+  <section aria-labelledby="g-cl">
+    <h2 id="g-cl" class="cv-titulo-2">Clases usadas en la app</h2>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Pieza</th><th>Clases</th></tr></thead>
+      <tbody>
+        <tr><td>Botón</td><td><code>.cv-btn</code> + <code>--primario|--secundario|--peligro|--fantasma</code> · <code>--bloque</code> <code>--compacto</code></td></tr>
+        <tr><td>Tarjeta</td><td><code>.cv-tarjeta</code> + <code>--destacada</code> · <code>__encabezado __icono __titulo __cuerpo</code></td></tr>
+        <tr><td>Chip</td><td><code>.cv-chip</code> + <code>--espera|--confirmado|--fallo</code></td></tr>
+        <tr><td>Libro</td><td><code>.cv-libro > .cv-fila</code> · <code>__quien __cuando __valor __monto __origen</code></td></tr>
+        <tr><td>Stepper</td><td><code>.cv-stepper</code> <code>--compacto</code> · <code>.cv-paso</code> + <code>--pendiente|--activo|--completado|--error</code></td></tr>
+        <tr><td>Selector</td><td><code>.cv-vista</code> · <code>__boton __lista __opcion</code> (ARIA listbox)</td></tr>
+        <tr><td>Aviso / diálogo</td><td><code>.cv-aviso --exito|--error|--advertencia</code> · <code>.cv-escudo .cv-dialogo</code></td></tr>
+        <tr><td>Aprobaciones</td><td><code>.cv-progreso</code> · <code>__pista __tramo .is-lleno</code></td></tr>
+        <tr><td>Skeleton</td><td><code>.cv-skel</code> + <code>--linea --circulo --pastilla</code> · <code>.cv-skel-fila .cv-skel-grupo</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="cv-nota cv-texto-suave">Convención BEM en español con prefijo <code>cv-</code>. Los estilos propios de la app (no del sistema) viven aparte en <code>app.css</code>.</p>
+  </section>
+
+  <section aria-labelledby="g-a11y">
+    <h2 id="g-a11y" class="cv-titulo-2">Accesibilidad (WCAG 2.2 AA)</h2>
+    <ul style="display:grid;gap:8px;padding-left:20px;list-style:disc">
+      <li>Contraste de texto 4.5:1 y de componentes 3:1 en claro y oscuro.</li>
+      <li>Foco visible: contorno sólido de 3px, separado 2px. No se quita.</li>
+      <li>Objetivos táctiles de 44px como mínimo (52px en botones principales).</li>
+      <li>Texto en rem, sin alturas fijas: sigue el zoom al 200%.</li>
+      <li>Stepper: <code>&lt;ol aria-label&gt;</code>, <code>aria-current="step"</code>, resumen <code>role="status"</code>.</li>
+      <li>Diálogo: <code>aria-modal</code>, foco a la opción menos riesgosa, Escape cierra, fondo <code>inert</code>.</li>
+      <li>Antes de entregar: recorrer con Tab, zoom 200%, <code>prefers-reduced-motion</code>, VoiceOver en el flujo de pago.</li>
+    </ul>
+  </section>
+</div>
+<script>
+  var bt = document.getElementById('tema');
+  bt.addEventListener('click', function () {
+    var t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem('convite.tema', t); } catch (e) {}
+    pintar();
+  });
+  // Lee los valores reales desde los tokens: la guía no puede desactualizarse.
+  function leer(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function muestra(n, esColor) {
+    return '<div class="g-muestra"><i style="background:var(' + n + ')"></i><b>' + n.replace('--', '') + '</b><code>' + leer(n) + '</code></div>';
+  }
+  function pintar() {
+    var css = '';
+    for (var i = 0; i < document.styleSheets.length; i++) { try { for (var r of document.styleSheets[i].cssRules) { if (r.selectorText && /^:root/.test(r.selectorText)) css += r.cssText; } } catch (e) {} }
+    var nombres = (css.match(/--[a-z0-9-]+(?=:)/g) || []).filter(function (v, i, a) { return a.indexOf(v) === i; });
+    var colores = nombres.filter(function (n) { return /^--color-/.test(n) && !/-(hover|presionado)$/.test(n) && n !== '--color-escudo'; });
+    var paleta = nombres.filter(function (n) { return /^--paleta-/.test(n); });
+    document.getElementById('colores').innerHTML = colores.map(function (n) { return muestra(n); }).join('');
+    document.getElementById('paleta').innerHTML = paleta.map(function (n) { return muestra(n); }).join('');
+    var esp = nombres.filter(function (n) { return /^--(espacio|radio|toque|duracion|z)-/.test(n); });
+    document.getElementById('espacios').innerHTML = esp.map(function (n) { return '<div class="g-muestra"><b>' + n.replace('--', '') + '</b><code>' + leer(n) + '</code></div>'; }).join('');
+    bt.textContent = document.documentElement.dataset.theme === 'dark' ? 'Ver en modo claro' : 'Ver en modo oscuro';
+  }
+  pintar();
+</script>
+</body>
+</html>

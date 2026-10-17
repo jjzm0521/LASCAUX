@@ -1,0 +1,15 @@
+/* Ajustes propios de la app (no del sistema de diseño). Solo usa variables de tokens.css. */
+html { scroll-padding-bottom: 5rem; }
+body { margin: 0; min-height: 100vh; }
+.app { max-width: 30rem; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; background: var(--color-fondo); }
+.app > main { flex: 1; }
+.app .cv-barra { position: sticky; top: 0; z-index: var(--z-barra); background: var(--color-fondo); }
+.app__acciones { display: inline-flex; align-items: center; gap: var(--espacio-1); }
+.cv-escudo { position: fixed; }
+.cv-vista { position: relative; }
+.cv-avisos--fijos { position: fixed; left: 0; right: 0; bottom: var(--espacio-4); z-index: var(--z-aviso); width: min(30rem, 100%); margin: 0 auto; padding: 0 var(--espacio-4); pointer-events: none; }
+.cv-avisos--fijos > * { pointer-events: auto; }
+.app__pie { padding: var(--espacio-4) var(--espacio-4) var(--espacio-8); text-align: center; }
+.app__aviso-prueba { display: flex; align-items: center; justify-content: center; gap: var(--espacio-2); padding: var(--espacio-2) var(--espacio-4); background: var(--color-fondo-suave); color: var(--color-texto-suave); font-size: var(--tamano-nota); line-height: var(--interlineado-nota); font-weight: var(--peso-medio); text-align: center; }
+h1[tabindex="-1"]:focus { outline: none; }
+.app [hidden] { display: none !important; }

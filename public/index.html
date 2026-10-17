@@ -1,42 +1,445 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Círculos</title>
-<style>
-body{font-family:system-ui;max-width:720px;margin:0 auto;padding:16px;background:#fafaf7;color:#222}
-.card{background:#fff;border:1px solid #e3e3dc;border-radius:10px;padding:14px;margin:12px 0}
-button{padding:8px 12px;border-radius:8px;border:0;background:#0b6e4f;color:#fff;cursor:pointer}
-.ok{color:#0b6e4f}.bad{color:#b00020}.pending{color:#a60}
-.score{font-size:2rem;font-weight:700}
-</style></head><body>
-<h1 id="title">Círculo</h1>
-<div id="msg"></div>
-<div class="card"><div>Reputación del círculo</div><div class="score" id="score">–</div><small id="scoreDetail"></small></div>
-<div class="card"><h3>Miembros</h3><div id="members"></div></div>
-<div class="card"><h3>Libro de aportes (visible para todos)</h3><div id="ledger"></div></div>
-<div class="card"><h3>Desembolsos</h3><div id="payouts"></div></div>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convite</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="app.css">
 <script>
-const q=new URLSearchParams(location.search), id=q.get('circle')||1;
-const api=(u,o)=>fetch(u,o).then(r=>r.json());
-const post=(u,b)=>api(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});
-const fmt=(v,a=2)=>(Number(v)/10**a).toFixed(a);
-async function load(){
-  const d=await api('/api/circles/'+id);
-  title.textContent=d.circle.name+' · ronda '+d.circle.round;
-  score.textContent=d.reputation.score+'%';
-  scoreDetail.textContent=d.reputation.confirmed+' de '+d.reputation.expected+' aportes confirmados';
-  if(q.get('ok'))msg.innerHTML='<p class=ok>✔ Aporte confirmado</p>';
-  if(q.get('error'))msg.innerHTML='<p class=bad>'+q.get('error')+'</p>';
-  members.innerHTML=d.members.map(m=>`<div>${m.turn}. ${m.name} (${m.country}) <button onclick="contribute(${m.id})">Aportar</button> <button onclick="payout(${m.id})">Pedir desembolso</button></div>`).join('');
-  ledger.innerHTML=d.ledger.map(l=>`<div class="${l.status=='confirmed'?'ok':l.status=='failed'?'bad':'pending'}">${l.name} (${l.country}) · ronda ${l.round} · recibe ${fmt(l.receive_value)} · ${l.status}</div>`).join('')||'Sin aportes';
-  payouts.innerHTML=d.payouts.map(p=>`<div>${p.name}: ${fmt(p.amount)} · ${p.approvals}/${d.circle.min_approvals} aprobaciones · ${p.status}
-    ${d.members.filter(m=>m.id!=p.member_id).map(m=>`<button onclick="approve(${p.id},${m.id})">Aprueba ${m.name}</button>`).join(' ')}</div>`).join('')||'Ninguno';
+  // Tema antes de pintar, para que no parpadee. Respeta el sistema y deja elegir a mano.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('convite.tema'); } catch (e) {}
+    if (!t) t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body class="cv-raiz">
+<div class="app">
+  <div class="app__aviso-prueba">Billeteras de prueba · dinero de juguete · Convite no guarda tu plata</div>
+  <div class="cv-barra">
+    <span class="cv-barra__marca">
+      <svg class="cv-logo" viewBox="0 0 64 64" width="32" height="32" role="img" aria-label="Convite"><circle class="m-p" cx="32.00" cy="11.00" r="7"/><circle class="m-p" cx="50.19" cy="21.50" r="7"/><circle class="m-s" cx="50.19" cy="42.50" r="7"/><circle class="m-p" cx="32.00" cy="53.00" r="7"/><circle class="m-a" cx="13.81" cy="42.50" r="7"/><circle class="m-p" cx="13.81" cy="21.50" r="7"/><circle class="m-c" cx="32" cy="32" r="4.5"/></svg>
+      Convite
+    </span>
+    <span class="app__acciones">
+      <button type="button" class="cv-btn cv-btn--fantasma cv-btn--compacto" data-accion="tema" id="btn-tema" aria-label="Cambiar a modo oscuro"></button>
+    </span>
+  </div>
+  <div id="vista"></div>
+</div>
+<div class="cv-avisos cv-avisos--fijos" id="avisos" aria-live="polite"></div>
+<div id="dialogos"></div>
+<p class="cv-sr" id="anuncio" role="status"></p>
+<noscript><p style="padding:16px">Convite necesita JavaScript para mostrar tu círculo.</p></noscript>
+
+<script>
+'use strict';
+/* ====================== utilidades ====================== */
+var qs = new URLSearchParams(location.search);
+var circleId = qs.get('circle') || 1;
+var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+var $ = function (id) { return document.getElementById(id); };
+function guardar(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function leer(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+
+// Íconos del sistema de diseño (trazo 2px, cuadrícula de 24px)
+var ICONOS = {
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  alerta: '<path d="M12 4.2L21 19.5H3z"/><path d="M12 10v4.2M12 17.2h.01"/>',
+  reloj: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.2M12 8h.01"/>',
+  billetera: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18"/><path d="M16.5 14.5h.01"/>',
+  flecha: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  atras: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  libro: '<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>',
+  escudo: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
+  candado: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  personas: '<path d="M16 19v-1a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v1"/><circle cx="10" cy="8" r="3"/><path d="M20 19v-1a4 4 0 0 0-3-3.9M15.5 5.2a3 3 0 0 1 0 5.6"/>',
+  refrescar: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>',
+  externo: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
+  abajo: '<path d="M6 9l6 6 6-6"/>',
+  sol: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
+  luna: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>'
+};
+function ico(n, c) { return '<svg class="cv-icono ' + (c || '') + '" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' + ICONOS[n] + '</svg>'; }
+var CARGADOR = '<svg class="cv-cargador cv-cargador--xs cv-cargador--mono" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><circle class="m-p" cx="32.00" cy="11.00" r="7"/><circle class="m-p" cx="50.19" cy="21.50" r="7"/><circle class="m-s" cx="50.19" cy="42.50" r="7"/><circle class="m-p" cx="32.00" cy="53.00" r="7"/><circle class="m-a" cx="13.81" cy="42.50" r="7"/><circle class="m-p" cx="13.81" cy="21.50" r="7"/><circle class="m-c" cx="32" cy="32" r="4.5"/></svg>';
+
+// Montos: COP 50.000 · USD 12,35. La moneda y la escala vienen siempre de la API; nunca se suponen.
+function fmtMonto(a) {
+  if (!a || a.value == null || a.assetScale == null) return null;
+  var n = Number(a.value) / Math.pow(10, a.assetScale);
+  return a.assetCode + ' ' + new Intl.NumberFormat('es-CO', { minimumFractionDigits: a.assetScale, maximumFractionDigits: a.assetScale }).format(n);
 }
-async function contribute(memberId){
-  const r=await post('/api/circles/'+id+'/contribute',{memberId});
-  if(r.error)return msg.innerHTML='<p class=bad>'+r.error+'</p>';
-  if(confirm('Se debitarán '+fmt(r.debit.value,r.debit.assetScale)+' '+r.debit.assetCode+'. ¿Continuar a autorizar?'))location=r.redirectUrl;
+function fmtFecha(s) {
+  if (!s) return '';
+  var d = new Date(String(s).replace(' ', 'T') + 'Z');
+  return isNaN(d) ? '' : d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' }).replace('.', '');
 }
-const payout=async memberId=>{await post('/api/circles/'+id+'/payouts',{memberId});load()};
-const approve=async(pid,memberId)=>{await post('/api/payouts/'+pid+'/approve',{memberId});load()};
-load();setInterval(load,5000);
-</script></body></html>
+function fmtHora(iso) {
+  var d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+}
+function iniciales(n) { return String(n).trim().split(/\s+/).slice(0, 2).map(function (p) { return p[0] || ''; }).join('').toUpperCase(); }
+var PAISES = { CO: 'Colombia', US: 'Estados Unidos', MX: 'México', ES: 'España' };
+function avatar(m, idx, extra) {
+  var c = idx % 5; // color por orden, no por significado
+  return '<span class="cv-avatar' + (c ? ' cv-avatar--' + (c + 1) : '') + (extra || '') + '" aria-hidden="true">' + esc(iniciales(m.name)) + '</span>';
+}
+function api(url, opts) {
+  return fetch(url, opts).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (j) {
+      if (!r.ok) { var e = new Error(j.error || 'Algo salió mal. Intenta de nuevo.'); e.status = r.status; throw e; }
+      return j;
+    });
+  });
+}
+function post(url, body) { return api(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
+function anunciar(t) { var a = $('anuncio'); a.textContent = ''; setTimeout(function () { a.textContent = t; }, 50); }
+
+/* ====================== estado ====================== */
+var S = { view: 'cargando', data: null, me: null, pago: null, resultado: null, ocupado: false, huella: '' };
+
+function yo() {
+  if (!S.data) return null;
+  var ms = S.data.members;
+  var id = Number(leer('convite.yo.' + circleId));
+  return ms.find(function (m) { return m.id === id; }) || ms[0] || null;
+}
+function activoPote() { // moneda de la caja: sale del libro (receive); si aún no hay aportes, no se inventa
+  var l = (S.data.ledger || []).find(function (x) { return x.receive; });
+  return l ? l.receive : null;
+}
+function indiceMiembro(id) { return S.data.members.findIndex(function (m) { return m.id === id; }); }
+
+/* ====================== pasos del pago (stepper) ====================== */
+var PASOS = [
+  ['Solicitud', 'Pedimos permiso a tu billetera.'],
+  ['Autorización', 'Apruébalo en tu billetera.'],
+  ['Pago', 'Tu billetera envía el aporte.'],
+  ['Listo', 'Queda anotado en el libro.']
+];
+var ETQ = { completado: ['check', 'Hecho'], activo: ['reloj', 'En curso'], pendiente: ['reloj', 'Pendiente'], error: ['alerta', 'Falló'] };
+function stepper(estados, detalles, compacto) {
+  var activo = estados.indexOf('activo'), err = estados.indexOf('error');
+  var actual = err >= 0 ? err : (activo >= 0 ? activo : estados.length - 1);
+  var li = PASOS.map(function (p, i) {
+    var e = estados[i], det = (detalles && detalles[i]) || p[1];
+    var marca = e === 'completado' ? ico('check') : e === 'error' ? ico('x') : e === 'activo' ? CARGADOR : String(i + 1);
+    return '<li class="cv-paso cv-paso--' + e + '"' + (i === actual && e !== 'pendiente' ? ' aria-current="step"' : '') + '>' +
+      '<span class="cv-paso__marca" aria-hidden="true">' + marca + '</span>' +
+      '<div class="cv-paso__cuerpo"><div class="cv-paso__nombre"><span><span class="cv-sr">Paso ' + (i + 1) + ' de 4: </span>' + p[0] + '</span>' +
+      '<span class="cv-paso__estado">' + ico(ETQ[e][0], 'cv-icono--xs') + ETQ[e][1] + '</span></div>' +
+      '<p class="cv-paso__detalle">' + esc(det) + '</p></div></li>';
+  }).join('');
+  return '<ol class="cv-stepper' + (compacto ? ' cv-stepper--compacto' : '') + '" aria-label="Pasos del pago">' + li + '</ol>';
+}
+function resumenPaso(estados) {
+  var i = estados.indexOf('error'); if (i < 0) i = estados.indexOf('activo'); if (i < 0) i = 3;
+  return 'Paso ' + (i + 1) + ' de 4: ' + PASOS[i][0];
+}
+
+/* ====================== vistas ====================== */
+function barraVolver(on) {
+  return '<div class="cv-barra" style="position:static">' + (on ? '<button type="button" class="cv-barra__volver" data-accion="inicio">' + ico('atras') + 'Atrás</button>' : '<span></span>') + '</div>';
+}
+
+function vCargando() {
+  var fila = '<div class="cv-skel-fila"><span class="cv-skel cv-skel--circulo"></span><div class="cv-skel-grupo"><span class="cv-skel cv-skel--linea cv-skel--media" style="display:block"></span><span class="cv-skel cv-skel--linea cv-skel--corta" style="display:block"></span></div><span class="cv-skel cv-skel--pastilla"></span></div>';
+  return '<main class="cv-contenido" role="status" aria-busy="true"><span class="cv-sr">Cargando tu círculo…</span>' +
+    '<div aria-hidden="true"><span class="cv-skel cv-skel--linea-grande cv-skel--media" style="display:block"></span></div>' +
+    '<div class="cv-tarjeta" aria-hidden="true"><div class="cv-reputacion"><span class="cv-skel cv-skel--circulo" style="width:5rem;height:5rem"></span><div class="cv-skel-grupo"><span class="cv-skel cv-skel--linea-grande cv-skel--media" style="display:block"></span><span class="cv-skel cv-skel--pastilla"></span></div></div></div>' +
+    '<div class="cv-tarjeta" aria-hidden="true">' + fila + fila + fila + '</div></main>';
+}
+
+function chipMiembro(m) {
+  if (m.hasContributed) return '<span class="cv-chip cv-chip--confirmado">' + ico('check', 'cv-icono--xs') + 'Confirmado</span>';
+  var pend = S.data.ledger.some(function (l) { return l.member_id === m.id && l.round === S.data.circle.round && l.status === 'pending'; });
+  if (pend) return '<span class="cv-chip cv-chip--espera">' + ico('reloj', 'cv-icono--xs') + 'Esperando autorización</span>';
+  return '<span class="cv-chip">' + ico('billetera', 'cv-icono--xs') + 'Falta su aporte</span>';
+}
+
+function vInicio() {
+  var d = S.data, c = d.circle, me = S.me, pote = activoPote();
+  var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
+
+  var selector = '<div class="cv-vista"><button type="button" class="cv-vista__boton" id="vista-boton" data-accion="vista-abrir" aria-haspopup="listbox" aria-expanded="false">' +
+    avatar(me, indiceMiembro(me.id), ' cv-avatar--sm') +
+    '<span><span class="cv-vista__etiqueta">Estoy viendo como</span><span class="cv-vista__nombre">' + esc(me.name) + '</span></span>' + ico('abajo', 'cv-icono--sm') + '</button>' +
+    '<ul class="cv-vista__lista" role="listbox" aria-label="Ver el círculo como" id="vista-lista" hidden>' +
+    d.members.map(function (m, i) {
+      return '<li role="option" class="cv-vista__opcion" data-accion="vista-elegir" data-id="' + m.id + '" aria-selected="' + (m.id === me.id) + '" tabindex="-1">' +
+        avatar(m, i, ' cv-avatar--sm') + '<span>' + esc(m.name) + '</span>' + (m.id === me.id ? ico('check', 'cv-icono--sm') : '') + '</li>';
+    }).join('') + '</ul></div>';
+
+  var proximo;
+  if (me.hasContributed) {
+    proximo = '<section class="cv-tarjeta cv-tarjeta--destacada" aria-labelledby="t-paso"><div class="cv-tarjeta__encabezado"><span class="cv-tarjeta__icono">' + ico('check') + '</span>' +
+      '<div><p class="cv-nota" style="color:var(--color-texto-primario)">Tu próximo paso</p><h2 id="t-paso" class="cv-tarjeta__titulo">Tu aporte de la ronda ' + c.round + ' ya está</h2></div></div>' +
+      '<p class="cv-tarjeta__cuerpo">Está en el libro y todos lo pueden ver. Cuando empiece otra ronda, aquí te avisamos qué sigue.</p></section>';
+  } else {
+    proximo = '<section class="cv-tarjeta cv-tarjeta--destacada" aria-labelledby="t-paso"><div class="cv-tarjeta__encabezado"><span class="cv-tarjeta__icono">' + ico('billetera') + '</span>' +
+      '<div><p class="cv-nota" style="color:var(--color-texto-primario)">Tu próximo paso</p><h2 id="t-paso" class="cv-tarjeta__titulo">Tu aporte de la ronda ' + c.round + '</h2></div></div>' +
+      (monto ? '<p class="cv-monto-grande">' + esc(monto) + '</p><p class="cv-texto-suave" style="margin:4px 0 16px">Es lo que recibe la caja del círculo. Antes de pagar verás cuánto sale de tu billetera.</p>'
+             : '<p class="cv-texto-suave" style="margin:4px 0 16px">El aporte es un monto fijo. Antes de pagar verás cuánto sale de tu billetera y cuánto recibe tu círculo.</p>') +
+      '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>Pagar mi aporte' + ico('flecha', 'cv-icono--sm') + '</button></section>';
+  }
+
+  var rep = d.reputation, nivel = rep.score >= 80 ? ['Muy buena', 'confirmado', 'escudo'] : rep.score >= 50 ? ['Regular', 'espera', 'reloj'] : ['En construcción', '', 'info'];
+  var reputacion = '<section class="cv-tarjeta" aria-labelledby="t-rep"><div class="cv-reputacion"><div class="cv-reputacion__sello" role="img" aria-label="Reputación ' + rep.score + ' de 100"><div>' + rep.score + '<small>de 100</small></div></div>' +
+    '<div><h2 id="t-rep" class="cv-tarjeta__titulo">Reputación del círculo</h2><p class="cv-chip' + (nivel[1] ? ' cv-chip--' + nivel[1] : '') + '" style="margin:6px 0">' + ico(nivel[2], 'cv-icono--xs') + nivel[0] + '</p></div></div>' +
+    '<p class="cv-tarjeta__cuerpo" style="margin-top:12px">' + rep.confirmed + ' de ' + rep.expected + ' aportes confirmados. Se calcula del libro público: nadie puede cambiarla a mano.</p></section>';
+
+  var miembros = '<section class="cv-seccion" aria-labelledby="s-miem"><div class="cv-seccion__cabecera"><h2 id="s-miem" class="cv-seccion__titulo">Miembros</h2></div><div class="cv-tarjeta"><ul class="cv-miembros" aria-label="Miembros del círculo">' +
+    d.members.map(function (m, i) {
+      var soy = m.id === me.id;
+      return '<li class="cv-miembro">' + avatar(m, i, soy ? ' cv-avatar--yo' : '') + '<div class="cv-miembro__texto"><div class="cv-miembro__nombre">' + esc(m.name) + (soy ? ' (tú)' : '') + '</div>' +
+        '<div class="cv-miembro__meta">' + esc(PAISES[m.country] || m.country) + ' · turno ' + m.turn + '</div><div style="margin-top:6px">' + chipMiembro(m) + '</div></div></li>';
+    }).join('') + '</ul></div></section>';
+
+  var ESTADO = { confirmed: ['confirmado', 'check', 'Confirmado'], pending: ['espera', 'reloj', 'Esperando autorización'], failed: ['fallo', 'alerta', 'Falló'] };
+  var libro = '<section class="cv-seccion" aria-labelledby="s-libro"><div class="cv-seccion__cabecera"><h2 id="s-libro" class="cv-seccion__titulo">Libro de aportes</h2></div>' +
+    (d.ledger.length ? '<ul class="cv-libro" aria-label="Libro de aportes">' + d.ledger.map(function (l) {
+      var e = ESTADO[l.status] || ESTADO.pending, rec = fmtMonto(l.receive), deb = fmtMonto(l.debit);
+      var origen = deb && l.debit && l.receive && l.debit.assetCode !== l.receive.assetCode ? (l.status === 'confirmed' ? 'pagó ' : 'pagará ') + deb : '';
+      return '<li class="cv-fila">' + avatar(l, indiceMiembro(l.member_id)) + '<div class="cv-fila__texto"><div class="cv-fila__quien">' + esc(l.name) + '</div><div class="cv-fila__cuando">Ronda ' + l.round + ' · ' + esc(fmtFecha(l.created_at)) + '</div>' +
+        '<span class="cv-chip cv-chip--' + e[0] + '">' + ico(e[1], 'cv-icono--xs') + e[2] + '</span></div>' +
+        '<div class="cv-fila__valor">' + (rec ? '<span class="cv-fila__monto cv-monto">' + esc(rec) + '</span>' : '') + (origen ? '<span class="cv-fila__origen">' + esc(origen) + '</span>' : '') + '</div></li>';
+    }).join('') + '</ul>'
+    : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes</h3><p class="cv-vacio__texto">Cuando alguien pague, aparecerá aquí y todos lo podrán ver.</p></div></div>') + '</section>';
+
+  var potMonto = function (amt) { return pote ? fmtMonto({ value: amt, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null; };
+  var entregas = '<section class="cv-seccion" aria-labelledby="s-ent"><div class="cv-seccion__cabecera"><h2 id="s-ent" class="cv-seccion__titulo">Entregas de la caja</h2></div>' +
+    d.payouts.map(function (p) {
+      var necesarias = c.min_approvals, hechas = p.approvedBy.length, lista = p.status === 'approved' || hechas >= necesarias;
+      var nombres = p.approvedBy.map(function (id) { var m = d.members.find(function (x) { return x.id === id; }); return m ? m.name.split(' ')[0] : ''; }).filter(Boolean);
+      var detalle = lista ? 'La entrega está aprobada.' : hechas ? 'Aprobó ' + nombres.join(' y ') + '. Faltan ' + (necesarias - hechas) + '.' : 'Todavía nadie ha aprobado esta entrega.';
+      var tramos = ''; for (var i = 0; i < necesarias; i++) tramos += '<span class="cv-progreso__tramo' + (i < hechas ? ' is-lleno' : '') + '"></span>';
+      var puede = !lista && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0;
+      var m = potMonto(p.amount);
+      return '<section class="cv-tarjeta cv-entrega" aria-labelledby="t-ent' + p.id + '"><div class="cv-entrega__cabecera"><div><h3 id="t-ent' + p.id + '" class="cv-tarjeta__titulo">Entrega a ' + esc(p.name) + '</h3>' +
+        (p.purpose ? '<p class="cv-texto-suave">' + esc(p.purpose) + '</p>' : '') + '</div>' + (m ? '<span class="cv-monto-medio">' + esc(m) + '</span>' : '') + '</div>' +
+        '<div class="cv-progreso' + (lista ? ' cv-progreso--completo' : '') + '"><div class="cv-progreso__cabecera"><span class="cv-progreso__cifra" style="display:inline-flex;align-items:center;gap:8px">' + ico(lista ? 'check' : 'personas', 'cv-icono--sm') + hechas + ' de ' + necesarias + '</span><span class="cv-nota cv-texto-suave">aprobaciones</span></div>' +
+        '<div class="cv-progreso__pista" role="progressbar" aria-label="Aprobaciones de la entrega" aria-valuemin="0" aria-valuemax="' + necesarias + '" aria-valuenow="' + hechas + '" aria-valuetext="' + hechas + ' de ' + necesarias + ' aprobaciones">' + tramos + '</div>' +
+        '<p class="cv-progreso__detalle">' + esc(detalle) + '</p></div>' +
+        (puede ? '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="aprobar" data-id="' + p.id + '">' + ico('check', 'cv-icono--sm') + 'Aprobar esta entrega</button>' : '') + '</section>';
+    }).join('') +
+    (me.canRequestPayout ? '<div class="cv-tarjeta">' + (c.kind === 'circulo' ? '<div class="cv-campo"><label class="cv-campo__etiqueta" for="motivo">¿Para qué es la entrega? (opcional)</label><div class="cv-campo__control"><input class="cv-campo__entrada" id="motivo" type="text" maxlength="80" autocomplete="off"></div></div>' : '') +
+      '<p class="cv-texto-suave" style="margin-bottom:12px">Te toca pedir la entrega de la ronda ' + c.round + '. Necesita ' + c.min_approvals + ' aprobaciones de tu círculo.</p>' +
+      '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="pedir-entrega">Pedir la entrega de la caja</button></div>' : '') +
+    (!d.payouts.length && !me.canRequestPayout ? '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay entregas</h3><p class="cv-vacio__texto">Cuando a alguien le toque, podrá pedirla y el círculo la aprobará aquí.</p></div></div>' : '') +
+    '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
+
+  return '<main class="cv-contenido" id="principal"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p></div>' +
+    selector + proximo + reputacion + miembros + libro + entregas + '</main>';
+}
+
+function vResumen() {
+  var p = S.pago, c = S.data.circle, venc = p.expiresAt && Date.now() >= Date.parse(p.expiresAt);
+  var cobro = fmtMonto(p.debit), recibe = fmtMonto(p.receive);
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Revisa tu aporte</h1><p class="cv-texto-suave" style="margin-top:4px">Mira cuánto sale de tu billetera y cuánto recibe tu círculo.</p></div>' +
+    '<div class="cv-resumen"><div class="cv-resumen__fila"><span class="cv-texto-suave">Círculo</span><strong>' + esc(c.name) + '</strong></div><div class="cv-resumen__fila"><span class="cv-texto-suave">Ronda</span><strong class="cv-monto">' + c.round + '</strong></div>' +
+    '<div class="cv-resumen__fila cv-resumen__fila--fuerte" style="display:grid;gap:4px"><span class="cv-nota">Se te cobrará</span><span class="cv-monto-grande">' + esc(cobro || '—') + '</span><span class="cv-texto-suave">de tu billetera</span></div>' +
+    '<div class="cv-resumen__fila" style="display:grid;gap:4px"><span class="cv-nota cv-texto-suave">Tu círculo recibe</span><span class="cv-monto-grande" style="color:var(--color-texto-secundario)">' + esc(recibe || '—') + '</span><span class="cv-texto-suave">en la caja común</span></div></div>' +
+    '<p class="cv-texto-suave cv-nota">El valor en tu moneda lo fija tu billetera al calcular el pago.' + (p.expiresAt ? ' Autoriza antes de las <strong>' + esc(fmtHora(p.expiresAt)) + '</strong>; después hay que pedirlo de nuevo.' : '') + '</p>' +
+    (venc ? '<div class="cv-aviso cv-aviso--advertencia" role="alert"><span class="cv-aviso__icono">' + ico('alerta') + '</span><div><p class="cv-aviso__titulo">La cotización venció</p><p class="cv-aviso__texto">Pídela de nuevo para ver el valor actualizado.</p></div></div>'
+          : '<div class="cv-aviso cv-aviso--info" role="status"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Convite no guarda tu plata</p><p class="cv-aviso__texto">El pago sale de tu billetera y llega directo a la caja del círculo. Nosotros solo coordinamos.</p></div></div>') +
+    '<div style="display:grid;gap:12px">' + (venc ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar">' + ico('refrescar', 'cv-icono--sm') + 'Pedirlo de nuevo</button>'
+          : '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="continuar">' + ico('candado', 'cv-icono--sm') + 'Continuar a mi billetera</button>') +
+    '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar</button></div></main>';
+}
+
+function vPago(paso) { // paso: 1 = preparando la solicitud, 2 = esperando que apruebe en su billetera
+  var p = S.pago, est = paso === 1 ? ['activo', 'pendiente', 'pendiente', 'pendiente'] : ['completado', 'activo', 'pendiente', 'pendiente'];
+  var det = paso === 1 ? ['Preparando la solicitud en la billetera de prueba…'] : [null, 'Abre tu billetera y aprueba el pago' + (p && fmtMonto(p.debit) ? ' de ' + fmtMonto(p.debit) : '') + '.', 'Se hará cuando apruebes.'];
+  return barraVolver(false).replace('<span></span>', '<button class="cv-barra__volver" type="button" disabled style="opacity:.55">' + ico('atras') + 'Atrás</button>') +
+    '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Pagando tu aporte</h1><p class="cv-stepper-resumen" style="margin-top:8px;color:var(--color-texto-primario)" role="status">' + resumenPaso(est) + '</p></div>' +
+    '<div class="cv-tarjeta">' + stepper(est, det) + '</div>' +
+    '<div class="cv-aviso cv-aviso--info" role="status"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Te esperamos aquí</p><p class="cv-aviso__texto">Puede tardar unos segundos. No cierres esta página.</p></div></div>' +
+    (paso === 2 ? '<div style="display:grid;gap:12px"><a class="cv-btn cv-btn--primario cv-btn--bloque" href="' + esc(p.redirectUrl) + '">Abrir mi billetera' + ico('externo', 'cv-icono--sm') + '</a><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar el pago</button></div>' : '') + '</main>';
+}
+
+function vExito() {
+  var r = S.resultado, d = S.data;
+  var l = d.ledger.find(function (x) { return x.member_id === S.me.id && x.status === 'confirmed'; });
+  var pagaste = l && fmtMonto(l.debit), recibio = l && fmtMonto(l.receive);
+  return barraVolver(false) + '<main class="cv-contenido"><div class="cv-resultado"><span class="cv-resultado__sello cv-resultado__sello--exito">' + ico('check', 'cv-icono--lg') + '</span>' +
+    '<h1 class="cv-titulo-1" tabindex="-1" id="titulo">¡Listo! Tu aporte llegó</h1><p class="cv-texto-suave">Ya está anotado en el libro y todos lo pueden ver.</p></div>' +
+    '<div class="cv-tarjeta">' + stepper(['completado', 'completado', 'completado', 'completado'], null, true) + '</div>' +
+    (pagaste || recibio ? '<div class="cv-resumen">' + (pagaste ? '<div class="cv-resumen__fila"><span class="cv-texto-suave">Pagaste</span><strong class="cv-monto">' + esc(pagaste) + '</strong></div>' : '') +
+      (recibio ? '<div class="cv-resumen__fila"><span class="cv-texto-suave">Tu círculo recibió</span><strong class="cv-monto">' + esc(recibio) + '</strong></div>' : '') + '</div>' : '') +
+    '<p class="cv-nota cv-texto-suave">«Listo» significa que tu billetera aceptó enviar el aporte y quedó anotado aquí. La liquidación final la hace la red de pagos.</p>' +
+    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="ver-libro">' + ico('libro', 'cv-icono--sm') + 'Ver el libro de aportes</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div></main>';
+}
+
+function vError() {
+  var r = S.resultado, est = ['completado', 'pendiente', 'pendiente', 'pendiente'];
+  est[r.paso - 1 >= 0 ? r.paso - 1 : 1] = 'error'; for (var i = 0; i < r.paso - 1; i++) est[i] = 'completado';
+  return barraVolver(false) + '<main class="cv-contenido"><div class="cv-resultado"><span class="cv-resultado__sello cv-resultado__sello--error">' + ico('alerta', 'cv-icono--lg') + '</span>' +
+    '<h1 class="cv-titulo-1" tabindex="-1" id="titulo">No pudimos completar tu pago</h1><p class="cv-texto-suave">' + esc(/[.!?]$/.test(r.texto) ? r.texto : r.texto + '.') + ' ' + (r.seguro ? '<strong>No se te cobró nada.</strong>' : 'Revisa tu billetera antes de reintentar, por si el cobro sí se hizo.') + '</p></div>' +
+    '<div class="cv-tarjeta">' + stepper(est, null, true) + '</div>' +
+    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div>' +
+    '<p class="cv-nota cv-texto-suave" style="text-align:center">Si el problema sigue, díselo a quien organiza el círculo.</p></main>';
+}
+
+function vFalloCarga() {
+  return '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No pudimos cargar tu círculo</h1><p class="cv-vacio__texto">' + esc(S.errorCarga || 'Revisa tu conexión e intenta de nuevo.') + '</p><button type="button" class="cv-btn cv-btn--primario" data-accion="recargar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button></div></main>';
+}
+
+/* ====================== render ====================== */
+var VISTAS = { cargando: vCargando, inicio: vInicio, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
+function render(enfocar) {
+  if (S.data) S.me = yo();
+  $('vista').innerHTML = VISTAS[S.view]();
+  if (enfocar) { var t = $('titulo'); if (t) { t.focus({ preventScroll: true }); window.scrollTo(0, 0); } }
+}
+function ir(v, enfocar) { S.view = v; render(enfocar !== false); }
+
+/* ====================== datos ====================== */
+function cargar(silencioso) {
+  return api('/api/circles/' + circleId).then(function (d) {
+    var huella = JSON.stringify(d);
+    var cambio = huella !== S.huella;
+    S.huella = huella; S.data = d;
+    if (!S.me) S.me = yo();
+    if (S.view === 'cargando' || S.view === 'fallo') { ir('inicio', false); }
+    else if (S.view === 'inicio' && cambio && !silencioso) { render(false); }
+    else if (S.view === 'inicio' && cambio && !hayInteraccionAbierta()) { render(false); }
+  }).catch(function (e) {
+    if (S.view === 'cargando') { S.errorCarga = e.message; ir('fallo'); }
+  });
+}
+function hayInteraccionAbierta() {
+  var l = $('vista-lista'); var a = document.activeElement;
+  return (l && !l.hidden) || $('dialogos').firstChild || (a && a.tagName === 'INPUT');
+}
+
+/* ====================== acciones ====================== */
+function pagar() {
+  if (S.ocupado) return;
+  S.ocupado = true; S.pago = null; ir('pago1');
+  post('/api/circles/' + circleId + '/contribute', { memberId: S.me.id }).then(function (r) {
+    S.ocupado = false; S.pago = r; ir('resumen');
+  }).catch(function (e) {
+    S.ocupado = false;
+    S.resultado = { texto: e.message, paso: 1, seguro: true };
+    ir('error');
+  });
+}
+function continuar() {
+  ir('pago2');
+  setTimeout(function () { if (S.view === 'pago2' && S.pago) location.assign(S.pago.redirectUrl); }, 900);
+}
+function aviso(tipo, titulo, texto) {
+  var d = document.createElement('div');
+  d.className = 'cv-aviso cv-aviso--' + tipo + ' is-entrando'; d.setAttribute('role', tipo === 'error' ? 'alert' : 'status');
+  d.innerHTML = '<span class="cv-aviso__icono">' + ico(tipo === 'exito' ? 'check' : tipo === 'error' ? 'alerta' : 'info') + '</span><div><p class="cv-aviso__titulo">' + esc(titulo) + '</p><p class="cv-aviso__texto">' + esc(texto) + '</p></div>' +
+    '<button type="button" class="cv-aviso__cerrar" aria-label="Cerrar aviso">' + ico('x') + '</button>';
+  d.querySelector('button').addEventListener('click', function () { d.remove(); });
+  $('avisos').appendChild(d);
+  if (tipo !== 'error') setTimeout(function () { d.remove(); }, 7000);
+}
+function confirmar(o) {
+  return new Promise(function (ok) {
+    var previo = document.activeElement, cont = $('dialogos'), main = $('vista');
+    cont.innerHTML = '<div class="cv-escudo"><div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-t" aria-describedby="dlg-x"><span class="cv-dialogo__icono">' + ico('check') + '</span>' +
+      '<h2 class="cv-dialogo__titulo" id="dlg-t">' + esc(o.titulo) + '</h2><p class="cv-dialogo__texto" id="dlg-x">' + esc(o.texto) + '</p>' +
+      '<div class="cv-dialogo__acciones"><button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-r="si">' + esc(o.si) + '</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-r="no">' + esc(o.no) + '</button></div></div></div>';
+    main.setAttribute('inert', '');
+    var btns = cont.querySelectorAll('button');
+    function cerrar(r) { cont.innerHTML = ''; main.removeAttribute('inert'); document.removeEventListener('keydown', tecla); if (previo && previo.focus) previo.focus(); ok(r); }
+    function tecla(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cerrar(false); }
+      if (e.key === 'Tab') { var i = Array.prototype.indexOf.call(btns, document.activeElement); e.preventDefault(); btns[(i + (e.shiftKey ? -1 : 1) + btns.length) % btns.length].focus(); }
+    }
+    btns.forEach(function (b) { b.addEventListener('click', function () { cerrar(b.dataset.r === 'si'); }); });
+    document.addEventListener('keydown', tecla);
+    btns[1].focus(); // foco en la opción menos riesgosa
+  });
+}
+function aprobar(id) {
+  var p = S.data.payouts.find(function (x) { return x.id === Number(id); }); if (!p) return;
+  confirmar({ titulo: '¿Aprobar esta entrega?', texto: 'La entrega a ' + p.name + ' ' + (p.approvedBy.length + 1 >= S.data.circle.min_approvals ? 'quedará aprobada con tu voto.' : 'sumará tu aprobación.'), si: 'Sí, aprobar', no: 'Todavía no' }).then(function (si) {
+    if (!si) return;
+    post('/api/payouts/' + id + '/approve', { memberId: S.me.id }).then(function (r) {
+      aviso('exito', r.status === 'approved' ? 'Entrega aprobada' : 'Aprobación registrada', r.approvals + ' de ' + r.needed + ' aprobaciones.');
+      cargar();
+    }).catch(function (e) { aviso('error', 'No se pudo aprobar', e.message); });
+  });
+}
+function pedirEntrega() {
+  var m = $('motivo');
+  var body = { memberId: S.me.id }; if (m && m.value.trim()) body.purpose = m.value.trim();
+  post('/api/circles/' + circleId + '/payouts', body).then(function () {
+    aviso('exito', 'Entrega pedida', 'Ahora tu círculo la puede aprobar.'); cargar();
+  }).catch(function (e) { aviso('error', 'No se pudo pedir la entrega', e.message); });
+}
+
+/* Selector "Estoy viendo como": listbox con teclado */
+function vistaAbrir(abrir) {
+  var b = $('vista-boton'), l = $('vista-lista'); if (!b) return;
+  var mostrar = abrir === undefined ? l.hidden : abrir;
+  l.hidden = !mostrar; b.setAttribute('aria-expanded', String(mostrar));
+  if (mostrar) { var sel = l.querySelector('[aria-selected="true"]') || l.firstElementChild; sel.focus(); } else b.focus();
+}
+function vistaElegir(id) {
+  guardar('convite.yo.' + circleId, id);
+  S.me = yo(); render(false);
+  anunciar('Ahora ves el círculo como ' + S.me.name);
+  $('vista-boton').focus();
+}
+function temaIcono() {
+  var oscuro = document.documentElement.dataset.theme === 'dark', b = $('btn-tema');
+  b.innerHTML = ico(oscuro ? 'sol' : 'luna');
+  b.setAttribute('aria-label', oscuro ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro');
+}
+
+/* ====================== eventos ====================== */
+document.addEventListener('click', function (e) {
+  var a = e.target.closest('[data-accion]'); if (!a) { var l = $('vista-lista'); if (l && !l.hidden && !e.target.closest('.cv-vista')) vistaAbrir(false); return; }
+  var acc = a.dataset.accion;
+  if (acc === 'pagar') pagar();
+  else if (acc === 'continuar') continuar();
+  else if (acc === 'inicio') { S.pago = null; ir('inicio'); cargar(); }
+  else if (acc === 'ver-libro') { ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  else if (acc === 'vista-abrir') vistaAbrir();
+  else if (acc === 'vista-elegir') vistaElegir(a.dataset.id);
+  else if (acc === 'aprobar') aprobar(a.dataset.id);
+  else if (acc === 'pedir-entrega') pedirEntrega();
+  else if (acc === 'recargar') { S.view = 'cargando'; render(false); cargar(); }
+  else if (acc === 'tema') { var t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; guardar('convite.tema', t); temaIcono(); }
+});
+document.addEventListener('keydown', function (e) {
+  var l = $('vista-lista'); if (!l || l.hidden) return;
+  var ops = Array.prototype.slice.call(l.children), i = ops.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown') { e.preventDefault(); ops[(i + 1) % ops.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); ops[(i - 1 + ops.length) % ops.length].focus(); }
+  else if (e.key === 'Enter' || e.key === ' ') { if (i >= 0) { e.preventDefault(); vistaElegir(ops[i].dataset.id); } }
+  else if (e.key === 'Escape') { e.preventDefault(); vistaAbrir(false); }
+});
+
+/* ====================== arranque ====================== */
+// Mensajes del callback (?ok=1 o ?error=texto). Se limpian de la URL para que al recargar no reaparezcan.
+// "No se te cobró nada" solo se afirma en los casos que ocurren antes de crear el pago.
+function leerResultado() {
+  var ok = qs.get('ok'), err = qs.get('error');
+  if (!ok && !err) return;
+  history.replaceState(null, '', location.pathname + '?circle=' + circleId);
+  if (ok) { S.resultado = { ok: true }; return; }
+  var antes = /rechaz|venci|Hash|inválid/i.test(err), sinRed = /conectar|conexión/i.test(err);
+  S.resultado = { texto: err, paso: antes ? 2 : (sinRed ? 1 : 3), seguro: antes || sinRed };
+}
+leerResultado();
+temaIcono();
+render(false);
+cargar().then(function () {
+  if (S.resultado && S.data) { ir(S.resultado.ok ? 'exito' : 'error'); if (S.resultado.ok) anunciar('Tu aporte quedó confirmado'); }
+});
+setInterval(function () { if (S.view === 'inicio') cargar(true); }, 5000);
+</script>
+</body>
+</html>
