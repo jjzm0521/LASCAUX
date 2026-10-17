@@ -252,7 +252,8 @@ function vInicio() {
       var soy = m.id === me.id;
       return '<li class="cv-miembro">' + avatar(m, i, soy ? ' cv-avatar--yo' : '') + '<div class="cv-miembro__texto"><div class="cv-miembro__nombre">' + esc(m.name) + (soy ? ' (tú)' : '') + '</div>' +
         '<div class="cv-miembro__meta">' + esc(PAISES[m.country] || m.country) + ' · turno ' + m.turn + '</div><div style="margin-top:6px">' + chipMiembro(m) + '</div></div></li>';
-    }).join('') + '</ul></div></section>';
+    }).join('') + '</ul></div>' +
+    '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Agregar una billetera</button></section>';
 
   var ESTADO = { confirmed: ['confirmado', 'check', 'Confirmado'], pending: ['espera', 'reloj', 'Esperando autorización'], failed: ['fallo', 'alerta', 'Falló'] };
   var libro = '<section class="cv-seccion" aria-labelledby="s-libro"><div class="cv-seccion__cabecera"><h2 id="s-libro" class="cv-seccion__titulo">Libro de aportes</h2></div>' +
@@ -385,12 +386,51 @@ function compartir() {
   else aviso('info', 'Compartir no está disponible', 'Usa «Guardar como PDF» y envía el archivo.');
 }
 
+function vAgregar() {
+  var f = S.form || {}, err = S.formError || {};
+  var campo = function (id, etiqueta, ayuda, valor, extra) {
+    return '<div class="cv-campo' + (err[id] ? ' cv-campo--error' : '') + '"><label class="cv-campo__etiqueta" for="' + id + '">' + etiqueta + '</label>' +
+      '<p class="cv-campo__ayuda" id="' + id + '-ayuda">' + ayuda + '</p>' +
+      '<div class="cv-campo__control"><input class="cv-campo__entrada" id="' + id + '" name="' + id + '" type="text" value="' + esc(valor || '') + '" autocomplete="off" autocapitalize="off" spellcheck="false" ' + (extra || '') +
+      ' aria-describedby="' + id + '-ayuda' + (err[id] ? ' ' + id + '-error' : '') + '"' + (err[id] ? ' aria-invalid="true"' : '') + '></div>' +
+      (err[id] ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + esc(err[id]) + '</p>' : '') + '</div>';
+  };
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Agregar una billetera</h1><p class="cv-texto-suave" style="margin-top:4px">Suma a alguien al círculo con su propia billetera de prueba. Cada quien autoriza sus pagos desde la suya.</p></div>' +
+    '<form id="form-miembro" class="cv-tarjeta" style="display:grid;gap:20px" novalidate>' +
+    campo('nombre', 'Nombre', 'Cómo lo verá el círculo. Por ejemplo: Camila.', f.nombre, 'maxlength="40" autocomplete="name"') +
+    campo('billetera', 'Dirección de la billetera', 'La de tu cuenta en wallet.interledger-test.dev. Por ejemplo: $ilp.interledger-test.dev/camila', f.billetera, 'inputmode="url"') +
+    '<div class="cv-aviso cv-aviso--info" role="note"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Solo billeteras de prueba</p><p class="cv-aviso__texto">Es dinero de juguete. Convite no guarda tu plata ni pide claves: la autorización se hace en tu billetera.</p></div></div>' +
+    '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (S.ocupado ? CARGADOR + 'Revisando la billetera…' : 'Agregar al círculo') + '</button>' +
+    '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar</button></div></form></main>';
+}
+function guardarMiembro(e) {
+  e.preventDefault();
+  if (S.ocupado) return;
+  var nombre = $('nombre').value.trim(), billetera = $('billetera').value.trim(), err = {};
+  S.form = { nombre: nombre, billetera: billetera };
+  if (!nombre) err.nombre = 'Escribe un nombre para reconocerte en el círculo.';
+  if (!billetera) err.billetera = 'Pega la dirección de tu billetera.';
+  else if (!/^(\$|https:\/\/)[\w.-]+\.[a-z]{2,}(\/[\w.~%-]+)+$/i.test(billetera)) err.billetera = 'Se ve incompleta. Debe parecerse a $ilp.interledger-test.dev/tu-nombre.';
+  S.formError = err;
+  if (err.nombre || err.billetera) { render(false); var p = $(err.nombre ? 'nombre' : 'billetera'); if (p) p.focus(); return; }
+  S.ocupado = true; render(false);
+  post('/api/circles/' + circleId + '/members', { name: nombre, wallet: billetera }).then(function (r) {
+    S.ocupado = false; S.form = null; S.formError = null;
+    var m = r.member || r; if (m && m.id) guardar('convite.yo.' + circleId, m.id);
+    S.tab = 'miembros'; ir('inicio'); cargar();
+    aviso('exito', 'Billetera agregada', nombre + ' ya hace parte del círculo.');
+  }).catch(function (er) {
+    S.ocupado = false;
+    S.formError = { billetera: er.status === 404 ? 'Este servidor todavía no permite agregar billeteras. Avísale a quien mantiene el backend.' : er.message };
+    render(false); var p = $('billetera'); if (p) p.focus();
+  });
+}
 function vFalloCarga() {
   return '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No pudimos cargar tu círculo</h1><p class="cv-vacio__texto">' + esc(S.errorCarga || 'Revisa tu conexión e intenta de nuevo.') + '</p><button type="button" class="cv-btn cv-btn--primario" data-accion="recargar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button></div></main>';
 }
 
 /* ====================== render ====================== */
-var VISTAS = { comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: vInicio, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
+var VISTAS = { agregar: vAgregar, comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: vInicio, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
 function render(enfocar) {
   if (S.data) S.me = yo();
   document.querySelector('.app').classList.toggle('app--arranque', S.view === 'arranque');
@@ -511,6 +551,7 @@ document.addEventListener('click', function (e) {
   else if (acc === 'continuar') continuar();
   else if (acc === 'inicio') { if (S.view === 'resumen' || S.view === 'pago2') olvidarPend(); S.pago = null; ir('inicio'); cargar(); }
   else if (acc === 'ver-libro') { S.tab = 'libro'; ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  else if (acc === 'agregar-miembro') { S.form = null; S.formError = null; ir('agregar'); }
   else if (acc === 'tab') { S.tab = a.dataset.tab; render(false); window.scrollTo(0, 0); anunciar('Sección ' + a.innerText.trim().split('\n')[0]); var nb = document.querySelector('.cv-nav [aria-current="page"]'); if (nb) nb.focus({ preventScroll: true }); window.scrollTo(0, 0); }
   else if (acc === 'comprobante') { S.compId = Number(a.dataset.id); ir('comprobante'); }
   else if (acc === 'imprimir') { // el PDF siempre sale en claro, aunque la pantalla esté en oscuro
@@ -526,6 +567,7 @@ document.addEventListener('click', function (e) {
   else if (acc === 'recargar') { S.view = 'cargando'; render(false); cargar(); }
   else if (acc === 'tema') { var t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; guardar('convite.tema', t); temaIcono(); }
 });
+document.addEventListener('submit', function (e) { if (e.target.id === 'form-miembro') guardarMiembro(e); });
 document.addEventListener('keydown', function (e) {
   var l = $('vista-lista'); if (!l || l.hidden) return;
   var ops = Array.prototype.slice.call(l.children), i = ops.indexOf(document.activeElement);
