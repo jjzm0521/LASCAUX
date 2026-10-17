@@ -146,11 +146,19 @@ var PASOS = [
   ['Pago', 'Tu billetera envía el aporte.'],
   ['Listo', 'Queda anotado en el libro.']
 ];
+var PASOS_ENTREGA = [
+  ['Solicitud', 'Preparamos la entrega desde la caja.'],
+  ['Autorización de la caja', 'Quien tiene la billetera de la caja la aprueba.'],
+  ['Envío', 'La caja envía la plata.'],
+  ['Listo', 'Queda anotado en el libro.']
+];
+function esEntrega() { return !!((S.pago && S.pago.tipo === 'entrega') || (S.resultado && S.resultado.entrega)); }
+function pasosActual() { return esEntrega() ? PASOS_ENTREGA : PASOS; }
 var ETQ = { completado: ['check', 'Hecho'], activo: ['reloj', 'En curso'], pendiente: ['reloj', 'Pendiente'], error: ['alerta', 'Falló'] };
 function stepper(estados, detalles, compacto) {
   var activo = estados.indexOf('activo'), err = estados.indexOf('error');
   var actual = err >= 0 ? err : (activo >= 0 ? activo : estados.length - 1);
-  var li = PASOS.map(function (p, i) {
+  var li = pasosActual().map(function (p, i) {
     var e = estados[i], det = (detalles && detalles[i]) || p[1];
     var marca = e === 'completado' ? ico('check') : e === 'error' ? ico('x') : e === 'activo' ? CARGADOR : String(i + 1);
     return '<li class="cv-paso cv-paso--' + e + '"' + (i === actual && e !== 'pendiente' ? ' aria-current="step"' : '') + '>' +
@@ -163,7 +171,7 @@ function stepper(estados, detalles, compacto) {
 }
 function resumenPaso(estados) {
   var i = estados.indexOf('error'); if (i < 0) i = estados.indexOf('activo'); if (i < 0) i = 3;
-  return 'Paso ' + (i + 1) + ' de 4: ' + PASOS[i][0];
+  return 'Paso ' + (i + 1) + ' de 4: ' + pasosActual()[i][0];
 }
 
 /* ====================== vistas ====================== */
@@ -194,7 +202,8 @@ function chipMiembro(m) {
 function sec(n, html) { return '<div data-seccion="' + n + '" style="display:contents">' + html + '</div>'; }
 // Navegación inferior (solo móvil; en escritorio todo se ve junto)
 function navInferior(d, me) {
-  var porAprobar = d.payouts.filter(function (p) { return p.status !== 'approved' && p.approvedBy.length < aprobNecesarias(d, p) && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0; }).length;
+  var porAprobar = d.payouts.filter(function (p) { return p.status === 'requested' && p.kind !== 'reparto' && p.approvedBy.length < aprobNecesarias(d, p) && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0; }).length +
+    (d.closing && d.closing.status === 'proposed' && d.closing.approvedBy.indexOf(me.id) < 0 ? 1 : 0);
   var items = [['inicio', 'Inicio', 'casa'], ['libro', 'Libro', 'libro'], ['miembros', 'Miembros', 'personas'], ['entregas', 'Entregas', 'entregas'], ['cuenta', 'Cuenta', 'cuenta']];
   return '<nav class="cv-nav" aria-label="Principal">' + items.map(function (it) {
     return '<button type="button" class="cv-nav__item" data-accion="tab" data-tab="' + it[0] + '"' + (S.tab === it[0] ? ' aria-current="page"' : '') + '>' + ico(it[2]) +
@@ -206,12 +215,12 @@ function vCuenta(d, me, pote) {
   var suma = function (ls) { return ls.reduce(function (t, l) { return t + (l.receive ? Number(l.receive.value) : 0); }, 0); };
   var total = suma(d.ledger.filter(function (l) { return l.status === 'confirmed'; }));
   var mio = suma(mios.filter(function (l) { return l.status === 'confirmed'; }));
-  var recibido = d.payouts.filter(function (p) { return p.member_id === me.id && p.status === 'approved'; }).reduce(function (t, p) { return t + Number(p.amount); }, 0);
+  var recibido = d.payouts.filter(function (p) { return p.member_id === me.id && p.status === 'paid'; }).reduce(function (t, p) { return t + Number(p.amount); }, 0);
   var en = function (n) { return pote ? fmtMonto({ value: String(n), assetCode: pote.assetCode, assetScale: pote.assetScale }) : '—'; };
   var pct = total ? Math.round(mio / total * 100) : 0;
   var filas = '';
   if (!me.hasContributed) {
-    var monto = pote ? en(d.circle.contribution) : null;
+    var monto = pote && d.circle.contribution != null ? en(d.circle.contribution) : null;
     filas += '<li><div class="cv-fila">' + avatar(me, indiceMiembro(me.id)) + '<div class="cv-fila__texto"><div class="cv-fila__quien">Ronda ' + d.circle.round + '</div><div class="cv-fila__cuando">Ronda actual</div><span class="cv-chip">' + ico('billetera', 'cv-icono--xs') + 'Falta tu aporte</span></div>' +
       (monto ? '<div class="cv-fila__valor"><span class="cv-fila__monto cv-monto">' + esc(monto) + '</span></div>' : '') + '</div></li>';
   }
@@ -226,11 +235,11 @@ function vCuenta(d, me, pote) {
   }).join('');
   return '<section class="cv-tarjeta cv-mio" aria-labelledby="t-mio"><h2 id="t-mio" class="cv-tarjeta__titulo">Tu plata en el círculo</h2>' +
     '<div class="cv-mio__par"><div class="cv-mio__dato"><span class="cv-mio__etiqueta">Has aportado</span><span class="cv-monto-medio">' + esc(en(mio)) + '</span></div>' +
-    '<div class="cv-mio__dato"><span class="cv-mio__etiqueta">Entregas aprobadas para ti</span><span class="cv-monto-medio">' + esc(en(recibido)) + '</span></div></div>' +
+    '<div class="cv-mio__dato"><span class="cv-mio__etiqueta">Has recibido</span><span class="cv-monto-medio">' + esc(en(recibido)) + '</span></div></div>' +
     '<div class="cv-parte"><div class="cv-parte__cabecera"><span class="cv-mio__etiqueta">Tu parte de la caja</span><span class="cv-monto-medio">' + pct + ' %</span></div>' +
     '<div class="cv-parte__pista" role="meter" aria-label="Tu parte de la caja" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-valuetext="' + pct + ' de cada 100 de la caja"><span class="cv-parte__relleno" style="width:' + pct + '%"></span></div>' +
     '<p class="cv-texto-suave cv-nota">' + (pote ? esc(en(mio)) + ' de los ' + esc(en(total)) + ' que han aportado entre todos.' : 'Cuando haya aportes confirmados verás aquí tu parte.') + '</p></div>' +
-    '<p class="cv-nota cv-texto-suave">Una entrega aprobada todavía no mueve dinero: el envío real es un siguiente paso del proyecto.</p></section>' +
+    '</section>' +
     '<section class="cv-seccion" aria-labelledby="s-comp"><div class="cv-seccion__cabecera"><h2 id="s-comp" class="cv-seccion__titulo">Mis comprobantes</h2></div>' +
     (filas ? '<ul class="cv-libro" aria-label="Mis aportes">' + filas + '</ul>' : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes tuyos</h3><p class="cv-vacio__texto">Cuando pagues, tu comprobante aparecerá aquí.</p></div></div>') + '</section>';
 }
@@ -278,7 +287,8 @@ function vPartes(d, me, pote) {
 }
 function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
-  var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
+  var variable = c.kind !== 'cadena', cerrado = c.status === 'closed';
+  var monto = pote && c.contribution != null ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
   var pctAprob = c.approvalPercent != null ? c.approvalPercent : c.approval_percent;
   var cuenta = vCuenta(d, me, pote) + (c.kind === 'natillera' ? vPartes(d, me, pote) : '');
   var caja = vCaja(d, pote);
@@ -295,23 +305,27 @@ function vInicio() {
     }).join('') + '<li role="option" class="cv-vista__opcion" data-accion="agregar-miembro" aria-selected="false" tabindex="-1">' + ico('billetera', 'cv-icono--sm') + '<span>Soy otra persona: crear mi usuario</span></li></ul></div>';
 
   var proximo;
-  if (me.hasContributed) {
+  var btnPagar = '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (variable && me.hasContributed ? 'Aportar de nuevo' : 'Pagar mi aporte') + ico('flecha', 'cv-icono--sm') + '</button>';
+  var avisoPend = pendienteYo ? '<div class="cv-aviso cv-aviso--advertencia" role="status" style="margin-bottom:12px"><span class="cv-aviso__icono">' + ico('reloj') + '</span><div><p class="cv-aviso__titulo">Ya tienes un pago esperando tu aprobación</p><p class="cv-aviso__texto">Termínalo en tu billetera o espera a que venza antes de pedir otro: así evitas que la billetera se confunda.</p></div></div>' : '';
+  if (cerrado) {
+    proximo = '<section class="cv-tarjeta cv-tarjeta--destacada" aria-labelledby="t-paso"><div class="cv-tarjeta__encabezado"><span class="cv-tarjeta__icono">' + ico('check') + '</span><div><p class="cv-nota" style="color:var(--color-texto-primario)">Estado del círculo</p><h2 id="t-paso" class="cv-tarjeta__titulo">Este círculo ya está cerrado</h2></div></div><p class="cv-tarjeta__cuerpo">La caja se repartió entre las personas. El libro queda disponible para consultarlo.</p></section>';
+  } else if (!variable && me.hasContributed) {
     proximo = '<section class="cv-tarjeta cv-tarjeta--destacada" aria-labelledby="t-paso"><div class="cv-tarjeta__encabezado"><span class="cv-tarjeta__icono">' + ico('check') + '</span>' +
       '<div><p class="cv-nota" style="color:var(--color-texto-primario)">Tu próximo paso</p><h2 id="t-paso" class="cv-tarjeta__titulo">Tu aporte de la ronda ' + c.round + ' ya está</h2></div></div>' +
       '<p class="cv-tarjeta__cuerpo">Está en el libro y todos lo pueden ver. Cuando empiece otra ronda, aquí te avisamos qué sigue.</p></section>';
   } else {
-    proximo = '<section class="cv-tarjeta cv-tarjeta--destacada" aria-labelledby="t-paso"><div class="cv-tarjeta__encabezado"><span class="cv-tarjeta__icono">' + ico('billetera') + '</span>' +
-      '<div><p class="cv-nota" style="color:var(--color-texto-primario)">Tu próximo paso</p><h2 id="t-paso" class="cv-tarjeta__titulo">Tu aporte de la ronda ' + c.round + '</h2></div></div>' +
-      (monto ? '<p class="cv-monto-grande">' + esc(monto) + '</p><p class="cv-texto-suave" style="margin:4px 0 16px">Es lo que recibe la caja del círculo. Antes de pagar verás cuánto sale de tu billetera.</p>'
-             : '<p class="cv-texto-suave" style="margin:4px 0 16px">El aporte es un monto fijo. Antes de pagar verás cuánto sale de tu billetera y cuánto recibe tu círculo.</p>') +
-      (pendienteYo ? '<div class="cv-aviso cv-aviso--advertencia" role="status" style="margin-bottom:12px"><span class="cv-aviso__icono">' + ico('reloj') + '</span><div><p class="cv-aviso__titulo">Ya tienes un pago esperando tu aprobación</p><p class="cv-aviso__texto">Termínalo en tu billetera o espera a que venza antes de pedir otro: así evitas que la billetera se confunda.</p></div></div>' : '') +
-      '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>Pagar mi aporte' + ico('flecha', 'cv-icono--sm') + '</button></section>';
+    proximo = '<section class="cv-tarjeta cv-tarjeta--destacada" aria-labelledby="t-paso"><div class="cv-tarjeta__encabezado"><span class="cv-tarjeta__icono">' + ico(me.hasContributed ? 'check' : 'billetera') + '</span>' +
+      '<div><p class="cv-nota" style="color:var(--color-texto-primario)">Tu próximo paso</p><h2 id="t-paso" class="cv-tarjeta__titulo">' + (variable ? 'Aporta lo que quieras' : 'Tu aporte de la ronda ' + c.round) + '</h2></div></div>' +
+      (variable ? '<p class="cv-texto-suave" style="margin:4px 0 16px">' + (me.hasContributed ? 'Ya aportaste en esta ronda; puedes aportar más cuando quieras. ' : '') + 'Escribes cuánto y, antes de pagar, ves cuánto sale de tu billetera y cuánto recibe la caja.</p>'
+        : monto ? '<p class="cv-monto-grande">' + esc(monto) + '</p><p class="cv-texto-suave" style="margin:4px 0 16px">Es lo que recibe la caja del círculo. Antes de pagar verás cuánto sale de tu billetera.</p>'
+             : '<p class="cv-texto-suave" style="margin:4px 0 16px">El aporte es un monto fijo. Antes de pagar verás cuánto sale de tu billetera y cuánto recibe tu círculo.</p>') + avisoPend + btnPagar + '</section>';
   }
 
   var rep = d.reputation, nivel = rep.score >= 80 ? ['Muy buena', 'confirmado', 'escudo'] : rep.score >= 50 ? ['Regular', 'espera', 'reloj'] : ['En construcción', '', 'info'];
   var reputacion = '<section class="cv-tarjeta" aria-labelledby="t-rep"><div class="cv-reputacion"><div class="cv-reputacion__sello" role="img" aria-label="Reputación ' + rep.score + ' de 100"><div>' + rep.score + '<small>de 100</small></div></div>' +
     '<div><h2 id="t-rep" class="cv-tarjeta__titulo">Reputación del círculo</h2><p class="cv-chip' + (nivel[1] ? ' cv-chip--' + nivel[1] : '') + '" style="margin:6px 0">' + ico(nivel[2], 'cv-icono--xs') + nivel[0] + '</p></div></div>' +
-    '<p class="cv-tarjeta__cuerpo" style="margin-top:12px">' + rep.confirmed + ' de ' + rep.expected + ' aportes confirmados. Se calcula del libro público: nadie puede cambiarla a mano.</p></section>';
+    '<p class="cv-tarjeta__cuerpo" style="margin-top:12px">' + rep.confirmed + ' de ' + rep.expected + (variable ? ' personas aportaron en esta ronda.' : ' aportes confirmados.') + ' Se calcula del libro público: nadie puede cambiarla a mano.</p></section>';
+  var rondaCard = variable && !cerrado ? '<section class="cv-tarjeta" aria-labelledby="t-ronda"><h2 id="t-ronda" class="cv-tarjeta__titulo">Ronda ' + c.round + '</h2><p class="cv-tarjeta__cuerpo" style="margin:6px 0 14px">Empieza un nuevo período cuando el grupo quiera. Los aportes anteriores se conservan en el libro.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="ronda-siguiente">' + ico('refrescar', 'cv-icono--sm') + 'Abrir la ronda siguiente</button></section>' : '';
 
   var miembros = '<section class="cv-seccion" aria-labelledby="s-miem"><div class="cv-seccion__cabecera"><h2 id="s-miem" class="cv-seccion__titulo">Miembros</h2></div><div class="cv-tarjeta"><ul class="cv-miembros" aria-label="Miembros del círculo">' +
     d.members.map(function (m, i) {
@@ -334,59 +348,59 @@ function vInicio() {
     }).join('') + '</ul>'
     : '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay aportes</h3><p class="cv-vacio__texto">Cuando alguien pague, aparecerá aquí y todos lo podrán ver.</p></div></div>') + '</section>';
 
-  var potMonto = function (amt) { return pote ? fmtMonto({ value: amt, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null; };
-  var entregas = '<section class="cv-seccion" aria-labelledby="s-ent"><div class="cv-seccion__cabecera"><h2 id="s-ent" class="cv-seccion__titulo">Entregas de la caja</h2></div>' + (pctAprob ? '<p class="cv-nota cv-texto-suave">Cada entrega necesita la aprobación de ' + textoProporcion(pctAprob) + '. Quien la recibe no vota.</p>' : '') +
-    d.payouts.map(function (p) {
-      var necesarias = aprobNecesarias(d, p), hechas = p.approvedBy.length, lista = p.status === 'approved' || hechas >= necesarias;
-      var nombres = p.approvedBy.map(function (id) { var m = d.members.find(function (x) { return x.id === id; }); return m ? m.name.split(' ')[0] : ''; }).filter(Boolean);
-      var detalle = lista ? 'La entrega está aprobada.' : hechas ? 'Aprobó ' + nombres.join(' y ') + '. Faltan ' + (necesarias - hechas) + '.' : 'Todavía nadie ha aprobado esta entrega.';
-      var tramos = ''; for (var i = 0; i < necesarias; i++) tramos += '<span class="cv-progreso__tramo' + (i < hechas ? ' is-lleno' : '') + '"></span>';
-      var puede = !lista && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0;
-      var m = potMonto(p.amount);
-      return '<section class="cv-tarjeta cv-entrega" aria-labelledby="t-ent' + p.id + '"><div class="cv-entrega__cabecera"><div><h3 id="t-ent' + p.id + '" class="cv-tarjeta__titulo">Entrega a ' + esc(p.name) + '</h3>' +
-        (p.purpose ? '<p class="cv-texto-suave">' + esc(p.purpose) + '</p>' : '') + '</div>' + (m ? '<span class="cv-monto-medio">' + esc(m) + '</span>' : '') + '</div>' +
-        '<div class="cv-progreso' + (lista ? ' cv-progreso--completo' : '') + '"><div class="cv-progreso__cabecera"><span class="cv-progreso__cifra" style="display:inline-flex;align-items:center;gap:8px">' + ico(lista ? 'check' : 'personas', 'cv-icono--sm') + hechas + ' de ' + necesarias + '</span><span class="cv-nota cv-texto-suave">aprobaciones</span></div>' +
-        '<div class="cv-progreso__pista" role="progressbar" aria-label="Aprobaciones de la entrega" aria-valuemin="0" aria-valuemax="' + necesarias + '" aria-valuenow="' + hechas + '" aria-valuetext="' + hechas + ' de ' + necesarias + ' aprobaciones">' + tramos + '</div>' +
-        '<p class="cv-progreso__detalle">' + esc(detalle) + '</p></div>' +
-        (puede ? '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="aprobar" data-id="' + p.id + '">' + ico('check', 'cv-icono--sm') + 'Aprobar esta entrega</button>' : '') + '</section>';
-    }).join('') +
-    (me.canRequestPayout ? '<div class="cv-tarjeta">' + (c.kind === 'circulo' ? '<div class="cv-campo"><label class="cv-campo__etiqueta" for="motivo">¿Para qué es la entrega? (opcional)</label><div class="cv-campo__control"><input class="cv-campo__entrada" id="motivo" type="text" maxlength="80" autocomplete="off"></div></div>' : '') +
-      '<p class="cv-texto-suave" style="margin-bottom:12px">Te toca pedir la entrega de la ronda ' + c.round + '. Necesita ' + aprobNecesarias(d, { member_id: me.id }) + (aprobNecesarias(d, { member_id: me.id }) === 1 ? ' aprobación' : ' aprobaciones') + ' de tu círculo.</p>' +
-      '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="pedir-entrega">Pedir la entrega de la caja</button></div>' : '') +
-    (!d.payouts.length && !me.canRequestPayout ? '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay entregas</h3><p class="cv-vacio__texto">Cuando a alguien le toque, podrá pedirla y el círculo la aprobará aquí.</p></div></div>' : '') +
-    '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
+  var entregas = vEntregas(d, me, pote, pctAprob);
 
   return '<main class="cv-contenido" id="principal" data-tab="' + S.tab + '"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p><button type="button" class="cv-enlace" data-accion="circulos" style="padding-left:0">Cambiar de círculo o crear otro</button></div>' +
-    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', caja) + sec('inicio', reputacion) + sec('inicio', agregarPersonas) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
+    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', caja) + sec('inicio', reputacion) + sec('inicio', rondaCard) + sec('inicio', agregarPersonas) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
 }
 
+function entregaDe(id) { return S.data.payouts.find(function (x) { return x.id === Number(id); }) || null; }
 function vResumen() {
   var p = S.pago, c = S.data.circle, venc = p.expiresAt && Date.now() >= Date.parse(p.expiresAt);
-  var cobro = fmtMonto(p.debit), recibe = fmtMonto(p.receive);
-  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Revisa tu aporte</h1><p class="cv-texto-suave" style="margin-top:4px">Mira cuánto sale de tu billetera y cuánto recibe tu círculo.</p></div>' +
+  var cobro = fmtMonto(p.debit), recibe = fmtMonto(p.receive), entrega = p.tipo === 'entrega', e = entrega ? entregaDe(p.payoutId) : null;
+  var titulo = entrega ? 'Revisa la entrega' : 'Revisa tu aporte';
+  var sub = entrega ? 'Mira cuánto sale de la caja y cuánto recibe ' + esc(e ? e.name : 'la persona') + '.' : 'Mira cuánto sale de tu billetera y cuánto recibe tu círculo.';
+  var filaSale = entrega ? ['Sale de la caja', 'de la billetera de la caja'] : ['Se te cobrará', 'de tu billetera'];
+  var filaRecibe = entrega ? ['Recibe ' + (e ? e.name : ''), 'en su billetera'] : ['Tu círculo recibe', 'en la caja común'];
+  var nota = '<p class="cv-texto-suave cv-nota">' + (entrega ? 'El valor en su moneda lo fija la billetera al calcular el envío.' : 'El valor en tu moneda lo fija tu billetera al calcular el pago.') +
+    (p.expiresAt ? ' Autoriza antes de las <strong>' + esc(fmtHora(p.expiresAt)) + '</strong>; después hay que pedirlo de nuevo.' : '') +
+    (entrega ? ' La autoriza quien tiene la billetera de la caja.' : ' Autoriza una sola vez y vuelve aquí; no abras otra solicitud mientras tanto.') + '</p>';
+  var avisoInfo = entrega ? ['Convite no guarda la plata', 'La plata sale de la billetera de la caja y llega directo a la billetera de ' + esc(e ? e.name : 'la persona') + '. Nosotros solo coordinamos.']
+                          : ['Convite no guarda tu plata', 'El pago sale de tu billetera y llega directo a la caja del círculo. Nosotros solo coordinamos.'];
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + titulo + '</h1><p class="cv-texto-suave" style="margin-top:4px">' + sub + '</p></div>' +
     '<div class="cv-resumen"><div class="cv-resumen__fila"><span class="cv-texto-suave">Círculo</span><strong>' + esc(c.name) + '</strong></div><div class="cv-resumen__fila"><span class="cv-texto-suave">Ronda</span><strong class="cv-monto">' + c.round + '</strong></div>' +
-    '<div class="cv-resumen__fila cv-resumen__fila--fuerte" style="display:grid;gap:4px"><span class="cv-nota">Se te cobrará</span><span class="cv-monto-grande">' + esc(cobro || '—') + '</span><span class="cv-texto-suave">de tu billetera</span></div>' +
-    '<div class="cv-resumen__fila" style="display:grid;gap:4px"><span class="cv-nota cv-texto-suave">Tu círculo recibe</span><span class="cv-monto-grande" style="color:var(--color-texto-secundario)">' + esc(recibe || '—') + '</span><span class="cv-texto-suave">en la caja común</span></div></div>' +
-    '<p class="cv-texto-suave cv-nota">El valor en tu moneda lo fija tu billetera al calcular el pago.' + (p.expiresAt ? ' Autoriza antes de las <strong>' + esc(fmtHora(p.expiresAt)) + '</strong>; después hay que pedirlo de nuevo.' : '') + ' Autoriza una sola vez y vuelve aquí; no abras otra solicitud mientras tanto.</p>' +
+    '<div class="cv-resumen__fila cv-resumen__fila--fuerte" style="display:grid;gap:4px"><span class="cv-nota">' + esc(filaSale[0]) + '</span><span class="cv-monto-grande">' + esc(cobro || '—') + '</span><span class="cv-texto-suave">' + filaSale[1] + '</span></div>' +
+    '<div class="cv-resumen__fila" style="display:grid;gap:4px"><span class="cv-nota cv-texto-suave">' + esc(filaRecibe[0]) + '</span><span class="cv-monto-grande" style="color:var(--color-texto-secundario)">' + esc(recibe || '—') + '</span><span class="cv-texto-suave">' + filaRecibe[1] + '</span></div></div>' + nota +
     (venc ? '<div class="cv-aviso cv-aviso--advertencia" role="alert"><span class="cv-aviso__icono">' + ico('alerta') + '</span><div><p class="cv-aviso__titulo">La cotización venció</p><p class="cv-aviso__texto">Pídela de nuevo para ver el valor actualizado.</p></div></div>'
-          : '<div class="cv-aviso cv-aviso--info" role="status"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Convite no guarda tu plata</p><p class="cv-aviso__texto">El pago sale de tu billetera y llega directo a la caja del círculo. Nosotros solo coordinamos.</p></div></div>') +
-    '<div style="display:grid;gap:12px">' + (venc ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar">' + ico('refrescar', 'cv-icono--sm') + 'Pedirlo de nuevo</button>'
-          : '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="continuar">' + ico('candado', 'cv-icono--sm') + 'Continuar a mi billetera</button>') +
+          : '<div class="cv-aviso cv-aviso--info" role="status"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">' + avisoInfo[0] + '</p><p class="cv-aviso__texto">' + avisoInfo[1] + '</p></div></div>') +
+    '<div style="display:grid;gap:12px">' + (venc ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" ' + (entrega ? 'data-accion="ejecutar" data-id="' + p.payoutId + '"' : 'data-accion="pagar"') + '>' + ico('refrescar', 'cv-icono--sm') + 'Pedirlo de nuevo</button>'
+          : '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="continuar">' + ico('candado', 'cv-icono--sm') + (entrega ? 'Continuar a la billetera de la caja' : 'Continuar a mi billetera') + '</button>') +
     '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar</button></div></main>';
 }
-
-function vPago(paso) { // paso: 1 = preparando la solicitud, 2 = esperando que apruebe en su billetera
-  var p = S.pago, est = paso === 1 ? ['activo', 'pendiente', 'pendiente', 'pendiente'] : ['completado', 'activo', 'pendiente', 'pendiente'];
-  var det = paso === 1 ? ['Preparando la solicitud en la billetera de prueba…'] : [null, 'Abre tu billetera y aprueba el pago' + (p && fmtMonto(p.debit) ? ' de ' + fmtMonto(p.debit) : '') + '.', 'Se hará cuando apruebes.'];
+function vPago(paso) { // paso: 1 = preparando la solicitud, 2 = esperando que apruebe en la billetera
+  var p = S.pago || {}, entrega = p.tipo === 'entrega', est = paso === 1 ? ['activo', 'pendiente', 'pendiente', 'pendiente'] : ['completado', 'activo', 'pendiente', 'pendiente'];
+  var monto = p.debit ? fmtMonto(p.debit) : null;
+  var det = paso === 1 ? [entrega ? 'Preparando la entrega desde la caja…' : 'Preparando la solicitud en la billetera de prueba…']
+    : [null, entrega ? 'Abre la billetera de la caja y aprueba el envío' + (monto ? ' de ' + monto : '') + '.' : 'Abre tu billetera y aprueba el pago' + (monto ? ' de ' + monto : '') + '.', entrega ? 'Se hará cuando se apruebe.' : 'Se hará cuando apruebes.'];
   return barraVolver(false).replace('<span></span>', '<button class="cv-barra__volver" type="button" disabled style="opacity:.55">' + ico('atras') + 'Atrás</button>') +
-    '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Pagando tu aporte</h1><p class="cv-stepper-resumen" style="margin-top:8px;color:var(--color-texto-primario)" role="status">' + resumenPaso(est) + '</p></div>' +
+    '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + (entrega ? 'Enviando la entrega' : 'Pagando tu aporte') + '</h1><p class="cv-stepper-resumen" style="margin-top:8px;color:var(--color-texto-primario)" role="status">' + resumenPaso(est) + '</p></div>' +
     '<div class="cv-tarjeta">' + stepper(est, det) + '</div>' +
     '<div class="cv-aviso cv-aviso--info" role="status"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Te esperamos aquí</p><p class="cv-aviso__texto">Puede tardar unos segundos. No cierres esta página.</p></div></div>' +
-    (paso === 2 ? '<div style="display:grid;gap:12px"><a class="cv-btn cv-btn--primario cv-btn--bloque" href="' + esc(p.redirectUrl) + '">Abrir mi billetera' + ico('externo', 'cv-icono--sm') + '</a><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar el pago</button></div>' : '') + '</main>';
+    (paso === 2 ? '<div style="display:grid;gap:12px"><a class="cv-btn cv-btn--primario cv-btn--bloque" href="' + esc(p.redirectUrl) + '">' + (entrega ? 'Abrir la billetera de la caja' : 'Abrir mi billetera') + ico('externo', 'cv-icono--sm') + '</a><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">' + (entrega ? 'Cancelar el envío' : 'Cancelar el pago') + '</button></div>' : '') + '</main>';
 }
-
 function vExito() {
   var r = S.resultado, d = S.data;
+  if (r && r.entrega) {
+    var e = entregaDe(r.id), sale = e && fmtMonto(e.debit), llego = e && fmtMonto(e.receive);
+    return barraVolver(false) + '<main class="cv-contenido"><div class="cv-resultado"><span class="cv-resultado__sello cv-resultado__sello--exito">' + ico('check', 'cv-icono--lg') + '</span>' +
+      '<h1 class="cv-titulo-1" tabindex="-1" id="titulo">¡Listo! La entrega salió</h1><p class="cv-texto-suave">Ya está anotada en el libro y todos la pueden ver.</p></div>' +
+      '<div class="cv-tarjeta">' + stepper(['completado', 'completado', 'completado', 'completado'], null, true) + '</div>' +
+      (sale || llego ? '<div class="cv-resumen">' + (sale ? '<div class="cv-resumen__fila"><span class="cv-texto-suave">Salió de la caja</span><strong class="cv-monto">' + esc(sale) + '</strong></div>' : '') +
+        (llego ? '<div class="cv-resumen__fila"><span class="cv-texto-suave">Recibió ' + esc(e.name) + '</span><strong class="cv-monto">' + esc(llego) + '</strong></div>' : '') + '</div>' : '') +
+      '<p class="cv-nota cv-texto-suave">«Listo» significa que la billetera de la caja aceptó enviar la plata y quedó anotado aquí. La liquidación final la hace la red de pagos.</p>' +
+      '<div style="display:grid;gap:12px">' + (e ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="comprobante-entrega" data-id="' + e.id + '">' + ico('libro', 'cv-icono--sm') + 'Ver comprobante</button>' : '') +
+      '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="ver-entregas">Ver las entregas</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div></main>';
+  }
   var l = d.ledger.find(function (x) { return x.member_id === S.me.id && x.status === 'confirmed'; });
   var pagaste = l && fmtMonto(l.debit), recibio = l && fmtMonto(l.receive);
   return barraVolver(false) + '<main class="cv-contenido"><div class="cv-resultado"><span class="cv-resultado__sello cv-resultado__sello--exito">' + ico('check', 'cv-icono--lg') + '</span>' +
@@ -397,18 +411,18 @@ function vExito() {
     '<p class="cv-nota cv-texto-suave">«Listo» significa que tu billetera aceptó enviar el aporte y quedó anotado aquí. La liquidación final la hace la red de pagos.</p>' +
     '<div style="display:grid;gap:12px">' + (l ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="comprobante" data-id="' + l.id + '">' + ico('libro', 'cv-icono--sm') + 'Ver mi comprobante</button>' : '') + '<button type="button" class="cv-btn ' + (l ? 'cv-btn--secundario' : 'cv-btn--primario') + ' cv-btn--bloque" data-accion="ver-libro">' + ico('libro', 'cv-icono--sm') + 'Ver el libro de aportes</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div></main>';
 }
-
 function vError() {
-  var r = S.resultado, est = ['completado', 'pendiente', 'pendiente', 'pendiente'];
+  var r = S.resultado, est = ['completado', 'pendiente', 'pendiente', 'pendiente'], entrega = !!r.entrega;
   est[r.paso - 1 >= 0 ? r.paso - 1 : 1] = 'error'; for (var i = 0; i < r.paso - 1; i++) est[i] = 'completado';
+  var texto = /[.!?]$/.test(r.texto) ? r.texto : r.texto + '.';
+  var cierre = r.seguro ? (entrega ? '<strong>No salió plata de la caja.</strong>' : '<strong>No se te cobró nada.</strong>') : (entrega ? 'Revisa la billetera de la caja antes de reintentar, por si el envío sí salió.' : 'Revisa tu billetera antes de reintentar, por si el cobro sí se hizo.');
+  var reintento = entrega && r.id ? 'data-accion="ejecutar" data-id="' + r.id + '"' : 'data-accion="pagar"';
   return barraVolver(false) + '<main class="cv-contenido"><div class="cv-resultado"><span class="cv-resultado__sello cv-resultado__sello--error">' + ico('alerta', 'cv-icono--lg') + '</span>' +
-    '<h1 class="cv-titulo-1" tabindex="-1" id="titulo">No pudimos completar tu pago</h1><p class="cv-texto-suave">' + esc(/[.!?]$/.test(r.texto) ? r.texto : r.texto + '.') + ' ' + (r.seguro ? '<strong>No se te cobró nada.</strong>' : 'Revisa tu billetera antes de reintentar, por si el cobro sí se hizo.') + '</p></div>' +
+    '<h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + (entrega ? 'No pudimos completar la entrega' : 'No pudimos completar tu pago') + '</h1><p class="cv-texto-suave">' + esc(texto) + ' ' + cierre + '</p></div>' +
     '<div class="cv-tarjeta">' + stepper(est, null, true) + '</div>' +
-    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div>' +
+    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" ' + reintento + '>' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Volver al inicio</button></div>' +
     '<p class="cv-nota cv-texto-suave" style="text-align:center">Si el problema sigue, díselo a quien organiza el círculo.</p></main>';
 }
-
-
 function fmtFechaHora(sqlUtc) {
   if (!sqlUtc) return null;
   var d = new Date(String(sqlUtc).replace(' ', 'T') + 'Z');
@@ -427,6 +441,7 @@ function datosComprobante(l) {
   return { miembro: m, ref: ref, tasa: tasa, cuando: fmtFechaHora(l.confirmedAt) };
 }
 function vComprobante() {
+  if (S.compTipo === 'entrega') return vComprobanteEntrega();
   var d = S.data, l = d.ledger.find(function (x) { return x.id === S.compId; });
   if (!l) return barraVolver(true) + '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No encontramos ese comprobante</h1><p class="cv-vacio__texto">Vuelve al libro e inténtalo de nuevo.</p></div></main>';
   var x = datosComprobante(l), c = d.circle, soy = l.member_id === S.me.id;
@@ -493,7 +508,7 @@ function guardarMiembro(e) {
   });
 }
 // Cuando el backend v2 acepte aportes libres (docs/contrato-api-v2.md) se pone en true: el monto fijo solo se pide en cadena.
-var APORTE_LIBRE = false;
+var APORTE_LIBRE = true;
 var TIPOS = [
   ['cadena', 'Cadena', 'Todos aportan lo mismo cada ronda y, por turnos, una persona recibe toda la caja.', 'El mismo monto fijo, cada ronda.', 'La caja completa, cuando te toque.'],
   ['natillera', 'Natillera', 'Cada quien aporta lo que quiera y la plata se queda en la caja hasta el cierre.', 'Lo que quieras, cuando quieras.', 'Al cierre, en proporción a lo que aportaste.'],
@@ -590,12 +605,153 @@ function vQuien() {
     '<section class="cv-tarjeta cv-tarjeta--plana" aria-labelledby="t-nl"><h2 id="t-nl" class="cv-tarjeta__titulo">¿No estás en la lista?</h2><p class="cv-texto-suave" style="margin:4px 0 14px">Crea tu usuario con tu nombre y la dirección de tu billetera.</p>' +
     '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('mas', 'cv-icono--sm') + 'Crear mi usuario</button></section></main>';
 }
+function chipEntrega(st) {
+  var M = { requested: ['espera', 'reloj', 'Pedida'], approved: ['confirmado', 'check', 'Aprobada'], paying: ['espera', 'reloj', 'Enviando'], paid: ['confirmado', 'check', 'Entregada'], failed: ['fallo', 'alerta', 'Falló'] }[st] || ['espera', 'reloj', st];
+  return '<span class="cv-chip cv-chip--' + M[0] + '">' + ico(M[1], 'cv-icono--xs') + M[2] + '</span>';
+}
+function tarjetaEntrega(d, p, me, pote) {
+  var necesarias = aprobNecesarias(d, p), hechas = p.approvedBy.length, reparto = p.kind === 'reparto';
+  var m = pote ? fmtMonto({ value: p.amount, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
+  var nombres = p.approvedBy.map(function (id) { var x = d.members.find(function (y) { return y.id === id; }); return x ? x.name.split(' ')[0] : ''; }).filter(Boolean);
+  var barra = '';
+  if (p.status === 'requested' && !reparto) {
+    var tramos = ''; for (var i = 0; i < necesarias; i++) tramos += '<span class="cv-progreso__tramo' + (i < hechas ? ' is-lleno' : '') + '"></span>';
+    var detalle = hechas ? 'Aprobó ' + nombres.join(' y ') + '. Faltan ' + Math.max(0, necesarias - hechas) + '.' : 'Todavía nadie ha aprobado esta entrega.';
+    barra = '<div class="cv-progreso"><div class="cv-progreso__cabecera"><span class="cv-progreso__cifra" style="display:inline-flex;align-items:center;gap:8px">' + ico('personas', 'cv-icono--sm') + hechas + ' de ' + necesarias + '</span><span class="cv-nota cv-texto-suave">aprobaciones</span></div>' +
+      '<div class="cv-progreso__pista" role="progressbar" aria-label="Aprobaciones de la entrega" aria-valuemin="0" aria-valuemax="' + necesarias + '" aria-valuenow="' + hechas + '" aria-valuetext="' + hechas + ' de ' + necesarias + ' aprobaciones">' + tramos + '</div><p class="cv-progreso__detalle">' + esc(detalle) + '</p></div>';
+  } else if (p.status === 'requested' && reparto) {
+    barra = '<p class="cv-texto-suave">Se aprueba junto con el cierre de la natillera.</p>';
+  }
+  var acc = '';
+  if (p.status === 'requested' && !reparto && me.id !== p.member_id && p.approvedBy.indexOf(me.id) < 0) acc = '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="aprobar" data-id="' + p.id + '">' + ico('check', 'cv-icono--sm') + 'Aprobar esta entrega</button>';
+  else if (p.status === 'approved' || p.status === 'failed') acc = (p.status === 'failed' && p.error ? '<p class="cv-campo__error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(p.error) + '</span></p>' : '') +
+    '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="ejecutar" data-id="' + p.id + '" aria-describedby="n-' + p.id + '">' + ico('flecha', 'cv-icono--sm') + (p.status === 'failed' ? 'Intentar de nuevo' : reparto ? 'Enviar el reparto' : 'Enviar la entrega') + '</button><p class="cv-nota cv-texto-suave" id="n-' + p.id + '">La autoriza quien tiene la billetera de la caja.</p>';
+  else if (p.status === 'paying') acc = '<p class="cv-texto-suave">Esperando la autorización de la billetera de la caja. Si ya la autorizaron, en unos segundos se actualiza.</p>';
+  else if (p.status === 'paid') acc = '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="comprobante-entrega" data-id="' + p.id + '">' + ico('libro', 'cv-icono--sm') + 'Ver comprobante</button>';
+  return '<section class="cv-tarjeta cv-entrega" aria-labelledby="t-ent' + p.id + '"><div class="cv-entrega__cabecera"><div><h3 id="t-ent' + p.id + '" class="cv-tarjeta__titulo">' + (reparto ? 'Reparto a ' : 'Entrega a ') + esc(p.name) + '</h3>' +
+    (p.purpose ? '<p class="cv-texto-suave">' + esc(p.purpose) + '</p>' : '') + '<div style="margin-top:6px">' + chipEntrega(p.status) + '</div></div>' + (m ? '<span class="cv-monto-medio">' + esc(m) + '</span>' : '') + '</div>' + barra + acc + '</section>';
+}
+function tarjetaCierre(d, me, pote) {
+  var c = d.circle, cl = d.closing, pot = d.pot;
+  if (c.kind !== 'natillera') return '';
+  if (c.status === 'closed') return '<section class="cv-tarjeta cv-tarjeta--destacada"><h3 class="cv-tarjeta__titulo">Tu natillera se cerró</h3><p class="cv-tarjeta__cuerpo">La caja se repartió entre todas las personas en proporción a lo que aportó cada una.</p></section>';
+  if (!cl) {
+    if (!pot || Number(pot.balance) <= 0) return '<section class="cv-tarjeta"><h3 class="cv-tarjeta__titulo">Cierre de la natillera</h3><p class="cv-texto-suave">Cuando haya plata en la caja, el grupo podrá proponer el cierre y repartirla en proporción a lo aportado.</p></section>';
+    return '<section class="cv-tarjeta" aria-labelledby="t-cierre"><h3 id="t-cierre" class="cv-tarjeta__titulo">Cerrar la natillera</h3><p class="cv-texto-suave" style="margin:6px 0 14px">Se reparte la caja entre todas las personas, en proporción a lo que aportó cada una. Al cerrar se envía una entrega a cada persona y la natillera termina.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="proponer-cierre">Proponer el cierre</button></section>';
+  }
+  var reps = d.payouts.filter(function (p) { return p.closingId === cl.id; }), pagados = reps.filter(function (p) { return p.status === 'paid'; }).length;
+  if (cl.status === 'proposed') {
+    var hechas = cl.approvedBy.length, tramos = ''; for (var i = 0; i < cl.needed; i++) tramos += '<span class="cv-progreso__tramo' + (i < hechas ? ' is-lleno' : '') + '"></span>';
+    var yaVote = cl.approvedBy.indexOf(me.id) >= 0;
+    return '<section class="cv-tarjeta cv-entrega" aria-labelledby="t-cierre"><h3 id="t-cierre" class="cv-tarjeta__titulo">Cierre propuesto</h3><p class="cv-texto-suave">Si se aprueba, se envía un reparto a cada persona según su parte de la caja.</p>' +
+      '<div class="cv-progreso"><div class="cv-progreso__cabecera"><span class="cv-progreso__cifra" style="display:inline-flex;align-items:center;gap:8px">' + ico('personas', 'cv-icono--sm') + hechas + ' de ' + cl.needed + '</span><span class="cv-nota cv-texto-suave">aprobaciones del cierre</span></div><div class="cv-progreso__pista" role="progressbar" aria-label="Aprobaciones del cierre" aria-valuemin="0" aria-valuemax="' + cl.needed + '" aria-valuenow="' + hechas + '" aria-valuetext="' + hechas + ' de ' + cl.needed + ' aprobaciones">' + tramos + '</div></div>' +
+      (yaVote ? '<p class="cv-texto-suave">Ya diste tu aprobación.</p>' : '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="aprobar-cierre" data-id="' + cl.id + '">' + ico('check', 'cv-icono--sm') + 'Aprobar el cierre</button>') + '</section>';
+  }
+  return '<section class="cv-tarjeta" aria-labelledby="t-cierre"><h3 id="t-cierre" class="cv-tarjeta__titulo">Cierre en marcha</h3><p class="cv-texto-suave">' + pagados + ' de ' + reps.length + ' repartos enviados. Cada uno se envía con su propia autorización de la billetera de la caja.</p></section>';
+}
+function vEntregas(d, me, pote, pct) {
+  var c = d.circle, cerrado = c.status === 'closed', free = d.pot ? Number(d.pot.free) : 0;
+  var en = function (n) { return pote ? fmtMonto({ value: String(Math.round(n)), assetCode: pote.assetCode, assetScale: pote.assetScale }) : ''; };
+  var h = '<section class="cv-seccion" aria-labelledby="s-ent"><div class="cv-seccion__cabecera"><h2 id="s-ent" class="cv-seccion__titulo">Entregas de la caja</h2></div>' +
+    (pct ? '<p class="cv-nota cv-texto-suave">Cada entrega necesita la aprobación de ' + textoProporcion(pct) + '. Quien la recibe no vota.</p>' : '');
+  h += tarjetaCierre(d, me, pote);
+  h += d.payouts.map(function (p) { return tarjetaEntrega(d, p, me, pote); }).join('');
+  if (!cerrado) {
+    if (c.kind === 'cadena') {
+      var turno = d.members.find(function (m) { return m.turn === c.currentTurn; });
+      var faltan = d.members.filter(function (m) { return !m.hasContributed; });
+      h += '<div class="cv-tarjeta" style="display:grid;gap:12px"><h3 class="cv-tarjeta__titulo">Ronda ' + c.round + '</h3><p class="cv-texto-suave">' + (turno ? 'Le toca recibir a <strong>' + esc(turno.name) + (turno.id === me.id ? ' (tú)' : '') + '</strong>.' : '') + '</p>' +
+        (faltan.length ? '<div class="cv-aviso cv-aviso--advertencia" role="status"><span class="cv-aviso__icono">' + ico('reloj') + '</span><div><p class="cv-aviso__titulo">Faltan aportes de esta ronda</p><p class="cv-aviso__texto">Todavía no aportó: ' + esc(faltan.map(function (m) { return m.name; }).join(', ')) + '.</p></div></div>'
+          : '<div class="cv-aviso cv-aviso--exito" role="status"><span class="cv-aviso__icono">' + ico('check') + '</span><div><p class="cv-aviso__titulo">Ya están todos los aportes</p><p class="cv-aviso__texto">La entrega se puede pedir.</p></div></div>') +
+        (me.canRequestPayout && !faltan.length ? '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="pedir-entrega">Pedir la entrega de la ronda</button><p class="cv-nota cv-texto-suave">Necesita ' + aprobNecesarias(d, { member_id: me.id }) + (aprobNecesarias(d, { member_id: me.id }) === 1 ? ' aprobación' : ' aprobaciones') + ' de tu círculo.</p>' : '') + '</div>';
+    } else if (c.kind === 'circulo') {
+      h += '<div class="cv-tarjeta" style="display:grid;gap:16px"><h3 class="cv-tarjeta__titulo">Pedir una ayuda</h3>' +
+        '<p class="cv-texto-suave">' + (pote ? 'Hay <strong>' + esc(en(free)) + '</strong> libres en la caja.' : 'Pide un monto y el grupo lo aprueba.') + '</p>' +
+        (S.entregaError ? '<p class="cv-campo__error" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(S.entregaError) + '</span></p>' : '') +
+        '<div class="cv-campo cv-campo--monto"><label class="cv-campo__etiqueta" for="monto-entrega">Monto que necesitas</label><p class="cv-campo__ayuda" id="monto-entrega-a">Por ejemplo: 10</p><div class="cv-campo__control">' + (pote ? '<span class="cv-campo__prefijo" aria-hidden="true">' + esc(pote.assetCode) + '</span>' : '') + '<input id="monto-entrega" type="text" inputmode="decimal" autocomplete="off" class="cv-campo__entrada' + (pote ? ' cv-campo__entrada--con-prefijo' : '') + '" placeholder="0" aria-describedby="monto-entrega-a"></div></div>' +
+        '<div class="cv-campo"><label class="cv-campo__etiqueta" for="motivo">¿Para qué es? (opcional)</label><div class="cv-campo__control"><input class="cv-campo__entrada" id="motivo" type="text" maxlength="80" autocomplete="off"></div></div>' +
+        '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="pedir-entrega">Pedir la ayuda</button><p class="cv-nota cv-texto-suave">Necesita ' + aprobNecesarias(d, { member_id: me.id }) + (aprobNecesarias(d, { member_id: me.id }) === 1 ? ' aprobación' : ' aprobaciones') + ' de tu círculo.</p></div>';
+    }
+  }
+  if (!d.payouts.length && c.kind === 'natillera' && !d.closing) h += '<p class="cv-nota cv-texto-suave">En una natillera la caja no se entrega por turnos: se reparte al cierre, en proporción a lo aportado.</p>';
+  return h + '</section>';
+}
+
+function vMonto() {
+  var c = S.data.circle, pote = activoPote(), err = S.montoError;
+  var cod = pote ? pote.assetCode : null;
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">¿Cuánto vas a aportar?</h1><p class="cv-texto-suave" style="margin-top:4px">Cada quien aporta lo que quiere. Antes de pagar verás cuánto sale de tu billetera.</p></div>' +
+    '<form id="form-monto" class="cv-formulario" style="display:grid;gap:20px" novalidate><div class="cv-campo cv-campo--monto' + (err ? ' cv-campo--error' : '') + '"><label class="cv-campo__etiqueta" for="monto">Tu aporte' + (cod ? '<span class="cv-sr"> en ' + esc(cod) + '</span>' : '') + '</label>' +
+    '<p class="cv-campo__ayuda" id="monto-a">Escribe cuánto quieres aportar. Por ejemplo: 10.</p><div class="cv-campo__control">' + (cod ? '<span class="cv-campo__prefijo" aria-hidden="true">' + esc(cod) + '</span>' : '') +
+    '<input id="monto" name="monto" type="text" inputmode="decimal" autocomplete="off" class="cv-campo__entrada' + (cod ? ' cv-campo__entrada--con-prefijo' : '') + '" value="' + esc(S.monto || '') + '" placeholder="0" aria-describedby="monto-a' + (err ? ' monto-e' : '') + '"' + (err ? ' aria-invalid="true"' : '') + '></div>' +
+    (err ? '<p class="cv-campo__error" id="monto-e" role="alert">' + ico('alerta', 'cv-icono--sm') + '<span>' + esc(err) + '</span></p>' : '') + '</div>' +
+    '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque">Continuar</button><button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar</button></div></form></main>';
+}
+function guardarMonto(e) {
+  e.preventDefault();
+  var v = $('monto').value.trim().replace(',', '.'), pote = activoPote(), dec = (v.split('.')[1] || '').length;
+  S.monto = v; S.montoError = null;
+  if (!/^\d+(\.\d+)?$/.test(v) || Number(v) <= 0) S.montoError = 'Escribe solo números mayores que cero, por ejemplo 10.';
+  else if (pote && dec > pote.assetScale) S.montoError = 'El aporte no puede tener más de ' + pote.assetScale + ' decimales en ' + pote.assetCode + '.';
+  if (S.montoError) { render(false); var el = $('monto'); if (el) el.focus(); return; }
+  pagar(v);
+}
+function ejecutar(id) {
+  if (S.ocupado) return;
+  S.ocupado = true; S.pago = { tipo: 'entrega', payoutId: Number(id) }; S.resultado = null; ir('pago1');
+  post('/api/payouts/' + id + '/execute', { memberId: S.me.id }).then(function (r) {
+    S.ocupado = false; S.pago = Object.assign({ tipo: 'entrega', payoutId: Number(id) }, r); guardarPendP(id); ir('resumen');
+  }).catch(function (er) {
+    S.ocupado = false; S.pago = null;
+    if (er.status === 400) { ir('inicio'); S.tab = 'entregas'; render(false); aviso('error', 'No se pudo enviar la entrega', er.message); cargar(); return; }
+    S.resultado = { entrega: true, id: Number(id), texto: er.message, paso: 1, seguro: true }; ir('error');
+  });
+}
+function rondaSiguiente() {
+  confirmar({ titulo: '¿Abrir la ronda siguiente?', texto: 'Empieza un nuevo período. Los aportes anteriores se conservan en el libro.', si: 'Sí, abrir', no: 'Todavía no' }).then(function (si) {
+    if (!si) return;
+    post('/api/circles/' + circleId + '/rounds/next', { memberId: S.me.id }).then(function (r) { aviso('exito', 'Ronda abierta', 'Ahora están en la ronda ' + r.round + '.'); cargar(); })
+      .catch(function (e) { aviso('error', 'No se pudo abrir la ronda', e.message); });
+  });
+}
+function proponerCierre() {
+  confirmar({ titulo: '¿Proponer el cierre?', texto: 'Se reparte la caja entre todas las personas según lo que aportó cada una. Al cerrar se envía una entrega a cada persona y la natillera termina.', si: 'Sí, proponer', no: 'Todavía no' }).then(function (si) {
+    if (!si) return;
+    post('/api/circles/' + circleId + '/closing', { memberId: S.me.id }).then(function () { aviso('exito', 'Cierre propuesto', 'Ahora el grupo lo puede aprobar.'); cargar(); })
+      .catch(function (e) { aviso('error', 'No se pudo proponer el cierre', e.message); });
+  });
+}
+function aprobarCierre(id) {
+  confirmar({ titulo: '¿Aprobar el cierre?', texto: 'Con las aprobaciones necesarias, la caja se reparte entre todas las personas.', si: 'Sí, aprobar', no: 'Todavía no' }).then(function (si) {
+    if (!si) return;
+    post('/api/closings/' + id + '/approve', { memberId: S.me.id }).then(function (r) { aviso('exito', r.status === 'approved' ? 'Cierre aprobado' : 'Aprobación registrada', r.approvals + ' de ' + r.needed + ' aprobaciones.'); cargar(); })
+      .catch(function (e) { aviso('error', 'No se pudo aprobar el cierre', e.message); });
+  });
+}
+function vComprobanteEntrega() {
+  var d = S.data, p = entregaDe(S.compId);
+  if (!p) return barraVolver(true) + '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No encontramos ese comprobante</h1><p class="cv-vacio__texto">Vuelve a las entregas e inténtalo de nuevo.</p></div></main>';
+  var c = d.circle, dest = d.members.find(function (m) { return m.id === p.member_id; }) || {};
+  var logo = (document.querySelector('.cv-barra .cv-logo') || { outerHTML: '' }).outerHTML.replace('height="32" width="121"', 'height="28" width="106"');
+  var fila = function (t, v) { return '<div class="cv-recibo__dato"><dt>' + t + '</dt><dd>' + v + '</dd></div>'; };
+  var ref = p.outgoingId ? String(p.outgoingId).split('/').pop() : null;
+  var u = function (a) { return Number(a.value) / Math.pow(10, a.assetScale); }, tasa = null;
+  if (p.debit && p.receive && p.debit.assetCode !== p.receive.assetCode && u(p.debit) >= 1 && u(p.receive) >= 1) tasa = '1 ' + p.debit.assetCode + ' ≈ ' + p.receive.assetCode + ' ' + new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(u(p.receive) / u(p.debit));
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Comprobante</h1><p class="cv-texto-suave">' + (p.kind === 'reparto' ? 'Reparto' : 'Entrega') + ' de la ronda ' + p.round + '.</p></div>' +
+    '<article class="cv-recibo" aria-labelledby="t-rec"><div class="cv-recibo__cabecera">' + logo + chipEntrega(p.status) + '</div>' +
+    '<div class="cv-recibo__total"><p class="cv-nota cv-texto-suave">' + (p.kind === 'reparto' ? 'Reparto de la caja' : 'Entrega de la caja') + ' · ' + esc(c.name) + '</p><p id="t-rec" class="cv-monto-grande">' + esc(fmtMonto(p.receive) || fmtMonto(p.debit) || '—') + '</p><p class="cv-texto-suave">Ronda ' + p.round + '</p></div>' +
+    '<dl class="cv-recibo__datos">' + fila('Recibió', esc(p.name)) + (p.purpose ? fila('Motivo', esc(p.purpose)) : '') + fila('Fecha y hora', esc(fmtFechaHora(p.paidAt) || 'No disponible')) +
+    fila('Salió de la caja', esc(fmtMonto(p.debit) || '—')) + fila('Llegó a su billetera', esc(fmtMonto(p.receive) || '—')) + (tasa ? fila('Tasa aproximada', esc(tasa)) : '') +
+    fila('Billetera de la caja', esc(billeteraCorta(c.pot_wallet))) + fila('Billetera de destino', esc(billeteraCorta(dest.wallet))) + fila('Referencia', ref ? '<span class="cv-recibo__ref" title="' + esc(p.outgoingId) + '">' + esc(ref) + '</span>' : 'No hay referencia') + '</dl>' +
+    '<p class="cv-recibo__pie">Este comprobante sale del libro público. Convite no guarda el dinero: la entrega fue de la billetera de la caja a la billetera de la persona. «Entregada» significa que la billetera aceptó enviar el pago; la liquidación final la hace la red de pagos.</p></article>' +
+    '<div style="display:grid;gap:12px"><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="imprimir">' + ico('flecha', 'cv-icono--sm').replace('<path d="M5 12h14M13 6l6 6-6 6"/>', '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>') + 'Guardar como PDF</button></div></main>';
+}
 function vFalloCarga() {
   return '<main class="cv-contenido"><div class="cv-vacio"><h1 class="cv-vacio__titulo" tabindex="-1" id="titulo">No pudimos cargar tu círculo</h1><p class="cv-vacio__texto">' + esc(S.errorCarga || 'Revisa tu conexión e intenta de nuevo.') + '</p><button type="button" class="cv-btn cv-btn--primario" data-accion="recargar">' + ico('refrescar', 'cv-icono--sm') + 'Intentar de nuevo</button></div></main>';
 }
 
 /* ====================== render ====================== */
-var VISTAS = { quien: vQuien, circulos: vCirculos, crear: vCrear, agregar: vAgregar, comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: function () { return S.me ? vInicio() : vSinMiembros(); }, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
+var VISTAS = { monto: vMonto, quien: vQuien, circulos: vCirculos, crear: vCrear, agregar: vAgregar, comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: function () { return S.me ? vInicio() : vSinMiembros(); }, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
 function render(enfocar) {
   if (S.data) S.me = yo();
   document.querySelector('.app').classList.toggle('app--arranque', S.view === 'arranque');
@@ -626,19 +782,23 @@ function hayInteraccionAbierta() {
 }
 
 /* ====================== acciones ====================== */
-function pagar() {
+function pagar(monto) {
   if (S.ocupado) return;
-  S.ocupado = true; S.pago = null; ir('pago1');
-  post('/api/circles/' + circleId + '/contribute', { memberId: S.me.id }).then(function (r) {
+  var variable = S.data.circle.kind !== 'cadena';
+  if (variable && typeof monto !== 'string') { S.montoError = null; ir('monto'); return; }
+  S.ocupado = true; S.pago = null; S.resultado = null; S.monto = monto || null; ir('pago1');
+  post('/api/circles/' + circleId + '/contribute', Object.assign({ memberId: S.me.id }, variable ? { amount: monto } : {})).then(function (r) {
     S.ocupado = false; S.pago = r; guardarPend(r.contributionId); ir('resumen');
   }).catch(function (e) {
     S.ocupado = false;
+    if (variable && e.status === 400 && /aporte|monto|decimal/i.test(e.message)) { S.montoError = e.message; ir('monto'); return; }
     S.resultado = { texto: e.message, paso: 1, seguro: true };
     ir('error');
   });
 }
 function guardarPend(id) { try { sessionStorage.setItem(CLAVE_PEND, String(id)); } catch (e) {} }
-function olvidarPend() { try { sessionStorage.removeItem(CLAVE_PEND); } catch (e) {} }
+function olvidarPend() { try { sessionStorage.removeItem(CLAVE_PEND); sessionStorage.removeItem(CLAVE_PENDP); } catch (e) {} }
+function guardarPendP(id) { try { sessionStorage.setItem(CLAVE_PENDP, String(id)); } catch (e) {} }
 function continuar() {
   ir('pago2');
   setTimeout(function () { if (S.view === 'pago2' && S.pago) location.assign(S.pago.redirectUrl); }, 900);
@@ -681,14 +841,18 @@ function aprobar(id) {
   });
 }
 function pedirEntrega() {
-  var m = $('motivo');
-  var body = { memberId: S.me.id }; if (m && m.value.trim()) body.purpose = m.value.trim();
+  var c = S.data.circle, body = { memberId: S.me.id };
+  S.entregaError = null;
+  if (c.kind === 'circulo') {
+    var campo = $('monto-entrega'), v = campo ? campo.value.trim().replace(',', '.') : '', pote = activoPote();
+    if (!/^\d+(\.\d+)?$/.test(v) || Number(v) <= 0) { S.entregaError = 'Escribe un monto mayor que cero, por ejemplo 10.'; render(false); return; }
+    body.amount = v;
+    var mot = $('motivo'); if (mot && mot.value.trim()) body.purpose = mot.value.trim();
+  }
   post('/api/circles/' + circleId + '/payouts', body).then(function () {
     aviso('exito', 'Entrega pedida', 'Ahora tu círculo la puede aprobar.'); cargar();
-  }).catch(function (e) { aviso('error', 'No se pudo pedir la entrega', e.message); });
+  }).catch(function (e) { S.entregaError = c.kind === 'circulo' ? e.message : null; if (c.kind === 'circulo') render(false); aviso('error', 'No se pudo pedir la entrega', e.message); });
 }
-
-/* Selector "Estoy viendo como": listbox con teclado */
 function vistaAbrir(abrir) {
   var b = $('vista-boton'), l = $('vista-lista'); if (!b) return;
   var mostrar = abrir === undefined ? l.hidden : abrir;
@@ -722,7 +886,13 @@ document.addEventListener('click', function (e) {
   else if (acc === 'crear-circulo') { S.formC = null; S.formCError = null; ir('crear'); }
   else if (acc === 'agregar-miembro') { S.form = null; S.formError = null; ir('agregar'); }
   else if (acc === 'tab') { S.tab = a.dataset.tab; render(false); window.scrollTo(0, 0); anunciar('Sección ' + a.innerText.trim().split('\n')[0]); var nb = document.querySelector('.cv-nav [aria-current="page"]'); if (nb) nb.focus({ preventScroll: true }); window.scrollTo(0, 0); }
-  else if (acc === 'comprobante') { S.compId = Number(a.dataset.id); ir('comprobante'); }
+  else if (acc === 'comprobante') { S.compTipo = 'aporte'; S.compId = Number(a.dataset.id); ir('comprobante'); }
+  else if (acc === 'comprobante-entrega') { S.compTipo = 'entrega'; S.compId = Number(a.dataset.id); ir('comprobante'); }
+  else if (acc === 'ejecutar') ejecutar(a.dataset.id);
+  else if (acc === 'ronda-siguiente') rondaSiguiente();
+  else if (acc === 'proponer-cierre') proponerCierre();
+  else if (acc === 'aprobar-cierre') aprobarCierre(a.dataset.id);
+  else if (acc === 'ver-entregas') { S.tab = 'entregas'; ir('inicio', false); }
   else if (acc === 'imprimir') { // el PDF siempre sale en claro, aunque la pantalla esté en oscuro
     var tema = document.documentElement.dataset.theme; document.documentElement.dataset.theme = 'light';
     window.addEventListener('afterprint', function volver() { document.documentElement.dataset.theme = tema; window.removeEventListener('afterprint', volver); });
@@ -739,7 +909,7 @@ document.addEventListener('click', function (e) {
 document.addEventListener('change', function (e) {
   if (e.target.name === 'c-tipo' && S.view === 'crear') { var g = function (id) { var el = $(id); return el ? el.value : ''; }; S.formC = { nombre: g('c-nombre').trim(), tipo: e.target.value, billetera: g('c-billetera').trim(), monto: g('c-monto'), aprob: g('c-aprob') || '50' }; render(false); var r = document.querySelector('input[name="c-tipo"]:checked'); if (r) r.focus(); }
 });
-document.addEventListener('submit', function (e) { if (e.target.id === 'form-miembro') guardarMiembro(e); else if (e.target.id === 'form-circulo') guardarCirculo(e); });
+document.addEventListener('submit', function (e) { if (e.target.id === 'form-monto') guardarMonto(e); else if (e.target.id === 'form-miembro') guardarMiembro(e); else if (e.target.id === 'form-circulo') guardarCirculo(e); });
 document.addEventListener('keydown', function (e) {
   var l = $('vista-lista'); if (!l || l.hidden) return;
   var ops = Array.prototype.slice.call(l.children), i = ops.indexOf(document.activeElement);
@@ -757,18 +927,25 @@ function clasificar(msg) {
   return { texto: msg, paso: antes ? 2 : (sinRed ? 1 : 3), seguro: antes || sinRed };
 }
 function leerSesion(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+var CLAVE_PENDP = 'convite.pendp.' + circleId; // id de la entrega enviada a autorizar
 var CLAVE_PEND = 'convite.pend.' + circleId; // id del aporte que mandamos a autorizar (solo en esta pestaña)
 function leerResultado() {
-  var ok = qs.get('ok'), err = qs.get('error');
-  if (!ok && !err) return;
+  var ok = qs.get('ok'), err = qs.get('error'), po = qs.get('payout');
+  if (!ok && !err && !po) return;
   history.replaceState(null, '', location.pathname + '?circle=' + circleId);
-  try { sessionStorage.removeItem(CLAVE_PEND); } catch (e) {}
+  try { sessionStorage.removeItem(CLAVE_PEND); sessionStorage.removeItem(CLAVE_PENDP); } catch (e) {}
+  if (po) { S.tab = 'entregas'; var id = Number(qs.get('p')); S.resultado = po === 'ok' ? { entrega: true, ok: true, id: id } : Object.assign(clasificar(err || 'No se pudo enviar la entrega.'), { entrega: true, id: id }); return; }
   S.resultado = ok ? { ok: true } : clasificar(err);
 }
 // Si la persona volvió a mano (sin pasar por el callback), mostramos cómo terminó su aporte
 function revisarPendiente() {
-  var id = null; try { id = sessionStorage.getItem(CLAVE_PEND); } catch (e) {}
-  if (!id || S.resultado) return Promise.resolve();
+  var id = null, idp = null; try { id = sessionStorage.getItem(CLAVE_PEND); idp = sessionStorage.getItem(CLAVE_PENDP); } catch (e) {}
+  if (S.resultado || (!id && !idp)) return Promise.resolve();
+  if (idp) return api('/api/payouts/' + idp).then(function (p) {
+    if (p.status === 'paying' || p.status === 'approved' || p.status === 'requested') return;
+    try { sessionStorage.removeItem(CLAVE_PENDP); } catch (e) {}
+    S.tab = 'entregas'; S.resultado = p.status === 'paid' ? { entrega: true, ok: true, id: p.id } : Object.assign(clasificar(p.error || 'No se pudo enviar la entrega.'), { entrega: true, id: p.id });
+  }).catch(function () {});
   return api('/api/contributions/' + id).then(function (c) {
     if (c.status === 'pending' || c.status === 'processing') return;
     try { sessionStorage.removeItem(CLAVE_PEND); } catch (e) {}
@@ -780,7 +957,7 @@ function iniciarCirculo() {
   if (!S.resultado && !leerSesion('convite.arranque')) { S.view = 'arranque'; S.minArranque = Date.now() + 3600; try { sessionStorage.setItem('convite.arranque', '1'); } catch (e) {} }
   render(false);
   cargar().then(revisarPendiente).then(function () {
-    if (S.resultado && S.data) { ir(S.resultado.ok ? 'exito' : 'error'); if (S.resultado.ok) anunciar('Tu aporte quedó confirmado'); }
+    if (S.resultado && S.data) { ir(S.resultado.ok ? 'exito' : 'error'); if (S.resultado.ok) anunciar(S.resultado.entrega ? 'La entrega salió' : 'Tu aporte quedó confirmado'); }
   });
 }
 // Sin ?circle=: se muestra la lista. Si solo hay un círculo se abre directo (salvo que se pida la lista con ?lista=1).
