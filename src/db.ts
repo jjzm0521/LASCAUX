@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS members (
   name TEXT NOT NULL,
   country TEXT NOT NULL,
   wallet TEXT NOT NULL,                      -- billetera propia (puede estar en otra moneda)
+  asset_code TEXT,                           -- moneda de la billetera del miembro (ej. COP, USD)
   turn INTEGER NOT NULL                      -- orden de cobro (cadena)
 );
 CREATE TABLE IF NOT EXISTS contributions (
@@ -55,6 +56,10 @@ CREATE TABLE IF NOT EXISTS approvals (
 `);
 
 // Migración ligera para bases circulos.db ya creadas antes de agregar columnas nuevas
+const memberCols = db.prepare('PRAGMA table_info(members)').all() as { name: string }[];
+if (!memberCols.some((c) => c.name === 'asset_code')) {
+  db.exec('ALTER TABLE members ADD COLUMN asset_code TEXT');
+}
 const contribCols = db.prepare('PRAGMA table_info(contributions)').all() as { name: string }[];
 for (const col of ['receive_json', 'expires_at', 'error_msg', 'confirmed_at']) {
   if (!contribCols.some((c) => c.name === col)) {

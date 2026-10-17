@@ -1,12 +1,44 @@
 import 'dotenv/config';
 import express from 'express';
 import { db, reputation } from './db.js';
-import { startPayment, finishPayment, type PendingPayment } from './openPayments.js';
+import { startPayment, finishPayment, toUrl, getClient, type PendingPayment } from './openPayments.js';
 
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
+
+// Límite en memoria para altas de miembros: máximo 10 solicitudes por minuto por IP
+const memberRateMap = new Map<string, number[]>();
+function checkMemberRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const recent = (memberRateMap.get(ip) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 10) {
+    memberRateMap.set(ip, recent);
+    return false;
+  }
+  recent.push(now);
+  memberRateMap.set(ip, recent);
+  return true;
+}
+
+// Protección SSRF: solo consultar billeteras HTTPS dentro de los dominios permitidos (por defecto .interledger-test.dev)
+function isAllowedWalletUrl(u: string): boolean {
+  try {
+    const parsed = new URL(u);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return false;
+    const host = parsed.hostname.toLowerCase();
+    const allowed = (process.env.ALLOWED_WALLET_HOSTS ?? '.interledger-test.dev')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    return allowed.some((rule) =>
+      rule.startsWith('.') ? host === rule.slice(1) || host.endsWith(rule) : host === rule || host.endsWith('.' + rule),
+    );
+  } catch {
+    return false;
+  }
+}
 
 interface AmountInfo {
   value: string;
@@ -77,7 +109,13 @@ app.get('/api/circles/:id', (req, res) => {
   );
 
   const members = rawMembers.map((m) => ({
-    ...m,
+    id: m.id,
+    circle_id: m.circle_id,
+    name: m.name,
+    country: m.country,
+    wallet: m.wallet,
+    assetCode: m.asset_code ?? null,
+    turn: m.turn,
     hasContributed: activeRoundContribs.has(m.id),
     canRequestPayout: !hasRoundPayout && (circle.kind === 'circulo' || m.turn === currentTurn),
   }));
@@ -119,6 +157,95 @@ app.get('/api/circles/:id', (req, res) => {
   }));
 
   res.json({ circle: { ...circle, currentTurn }, members, ledger, payouts, reputation: reputation(id) });
+});
+
+// Alta de miembro con su propia billetera verificada contra Open Payments
+app.post('/api/circles/:id/members', async (req, res) => {
+  try {
+    const ip = req.ip || req.socket.remoteAddress || 'local';
+    if (!checkMemberRateLimit(ip)) {
+      return res.status(429).json({ error: 'Demasiados intentos seguidos. Espera un minuto e intenta de nuevo.' });
+    }
+
+    const circleId = Number(req.params.id);
+    const circle = db.prepare('SELECT * FROM circles WHERE id=?').get(circleId) as any;
+    if (!circle) return res.status(404).json({ error: 'Círculo no existe' });
+
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+    if (name.length > 40) return res.status(400).json({ error: 'El nombre no puede superar los 40 caracteres' });
+
+    const rawWallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
+    if (!rawWallet) return res.status(400).json({ error: 'La dirección de billetera es obligatoria' });
+
+    const walletUrl = toUrl(rawWallet);
+    if (!isAllowedWalletUrl(walletUrl)) {
+      return res.status(400).json({ error: 'Solo se permiten billeteras de la red de pruebas (.interledger-test.dev)' });
+    }
+
+    const normUrl = (w: string) => toUrl(w).replace(/\/$/, '').toLowerCase();
+    if (normUrl(walletUrl) === normUrl(circle.pot_wallet)) {
+      return res.status(400).json({ error: 'Esa es la billetera de la caja del círculo; usa la tuya.' });
+    }
+
+    const existingBefore = db.prepare('SELECT name FROM members WHERE circle_id=?').all(circleId) as { name: string }[];
+    if (existingBefore.length >= 12) return res.status(400).json({ error: 'El círculo ya está lleno' });
+    if (existingBefore.some((m) => m.name.trim().toLowerCase() === name.toLowerCase())) {
+      return res.status(400).json({ error: 'Ya existe un miembro con ese nombre en el círculo' });
+    }
+
+    let wa: { id: string; assetCode: string; assetScale: number };
+    try {
+      const c = await getClient();
+      wa = await c.walletAddress.get({ url: walletUrl });
+    } catch {
+      return res.status(400).json({ error: 'No encontramos esa billetera. Revisa la dirección.' });
+    }
+    if (!wa?.id || !wa?.assetCode) {
+      return res.status(400).json({ error: 'No encontramos esa billetera. Revisa la dirección.' });
+    }
+    if (normUrl(wa.id) === normUrl(circle.pot_wallet)) {
+      return res.status(400).json({ error: 'Esa es la billetera de la caja del círculo; usa la tuya.' });
+    }
+
+    // Revalidar cupo y nombre único tras el await antes de insertar
+    const currentMembers = db.prepare('SELECT name, turn FROM members WHERE circle_id=?').all(circleId) as { name: string; turn: number }[];
+    if (currentMembers.length >= 12) return res.status(400).json({ error: 'El círculo ya está lleno' });
+    if (currentMembers.some((m) => m.name.trim().toLowerCase() === name.toLowerCase())) {
+      return res.status(400).json({ error: 'Ya existe un miembro con ese nombre en el círculo' });
+    }
+
+    const turn = currentMembers.reduce((max, m) => Math.max(max, m.turn), 0) + 1;
+    const rawCountry = typeof req.body?.country === 'string' ? req.body.country.trim().slice(0, 2).toUpperCase() : '';
+    const country = rawCountry.length === 2 ? rawCountry : wa.assetCode;
+    const assetCode = wa.assetCode;
+
+    const ins = db
+      .prepare('INSERT INTO members (circle_id, name, country, wallet, asset_code, turn) VALUES (?,?,?,?,?,?)')
+      .run(circleId, name, country, wa.id, assetCode, turn);
+    const memberId = Number(ins.lastInsertRowid);
+
+    const totalMembers = currentMembers.length + 1;
+    const currentTurn = ((circle.round - 1) % totalMembers) + 1;
+    const hasRoundPayout = Boolean(db.prepare('SELECT id FROM payouts WHERE circle_id=? AND round=?').get(circleId, circle.round));
+
+    res.status(201).json({
+      member: {
+        id: memberId,
+        circle_id: circleId,
+        name,
+        country,
+        wallet: wa.id,
+        assetCode,
+        turn,
+        hasContributed: false,
+        canRequestPayout: !hasRoundPayout && (circle.kind === 'circulo' || turn === currentTurn),
+      },
+    });
+  } catch (e: any) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Estado individual de un aporte para el stepper y comprobante de la interfaz

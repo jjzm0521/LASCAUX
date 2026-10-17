@@ -9,12 +9,13 @@ const walletCo2 = process.env.WALLET_CO2 ?? walletCo;
 const hasDistinctUsWallet = Boolean(process.env.WALLET_US && process.env.WALLET_US !== pot);
 const walletMama = hasDistinctUsWallet ? process.env.WALLET_US! : walletCo;
 const countryMama = hasDistinctUsWallet ? 'US' : 'CO';
+const assetMama = hasDistinctUsWallet ? 'USD' : 'COP';
 const kind = process.env.CIRCLE_KIND ?? 'natillera';
 
 const c = db.prepare("INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals) VALUES ('Natillera Familia Medellín',?,?,1000,2)").run(kind, pot);
 const id = Number(c.lastInsertRowid);
-const m = db.prepare('INSERT INTO members (circle_id,name,country,wallet,turn) VALUES (?,?,?,?,?)');
-m.run(id, 'Mamá', countryMama, walletMama, 1);
-m.run(id, 'Juan', 'CO', walletCo, 2);
-m.run(id, 'Sofía', 'CO', walletCo2, 3);
+const m = db.prepare('INSERT INTO members (circle_id,name,country,wallet,asset_code,turn) VALUES (?,?,?,?,?,?)');
+m.run(id, 'Mamá', countryMama, walletMama, assetMama, 1);
+m.run(id, 'Juan', 'CO', walletCo, 'COP', 2);
+m.run(id, 'Sofía', 'CO', walletCo2, 'COP', 3);
 console.log('Círculo creado con id', id);
