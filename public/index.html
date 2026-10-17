@@ -235,7 +235,7 @@ function vInicio() {
     '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
 
   return '<main class="cv-contenido" id="principal"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p></div>' +
-    selector + proximo + reputacion + miembros + libro + entregas + '</main>';
+    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + proximo + reputacion + miembros + '</div><div class="app__col app__col--lista">' + libro + entregas + '</div></div></main>';
 }
 
 function vResumen() {
@@ -294,6 +294,7 @@ function vFalloCarga() {
 var VISTAS = { cargando: vCargando, inicio: vInicio, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
 function render(enfocar) {
   if (S.data) S.me = yo();
+  $('vista').className = S.view === 'inicio' || S.view === 'cargando' ? '' : 'app__estrecho'; // los pasos del pago se leen mejor en una columna
   $('vista').innerHTML = VISTAS[S.view]();
   if (enfocar) { var t = $('titulo'); if (t) { t.focus({ preventScroll: true }); window.scrollTo(0, 0); } }
 }
