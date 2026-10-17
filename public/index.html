@@ -166,6 +166,7 @@ function chipMiembro(m) {
 function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
   var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
+  var pendienteYo = d.ledger.some(function (l) { return l.member_id === me.id && l.round === c.round && l.status === 'pending'; });
 
   var selector = '<div class="cv-vista"><button type="button" class="cv-vista__boton" id="vista-boton" data-accion="vista-abrir" aria-haspopup="listbox" aria-expanded="false">' +
     avatar(me, indiceMiembro(me.id), ' cv-avatar--sm') +
@@ -186,6 +187,7 @@ function vInicio() {
       '<div><p class="cv-nota" style="color:var(--color-texto-primario)">Tu próximo paso</p><h2 id="t-paso" class="cv-tarjeta__titulo">Tu aporte de la ronda ' + c.round + '</h2></div></div>' +
       (monto ? '<p class="cv-monto-grande">' + esc(monto) + '</p><p class="cv-texto-suave" style="margin:4px 0 16px">Es lo que recibe la caja del círculo. Antes de pagar verás cuánto sale de tu billetera.</p>'
              : '<p class="cv-texto-suave" style="margin:4px 0 16px">El aporte es un monto fijo. Antes de pagar verás cuánto sale de tu billetera y cuánto recibe tu círculo.</p>') +
+      (pendienteYo ? '<div class="cv-aviso cv-aviso--advertencia" role="status" style="margin-bottom:12px"><span class="cv-aviso__icono">' + ico('reloj') + '</span><div><p class="cv-aviso__titulo">Ya tienes un pago esperando tu aprobación</p><p class="cv-aviso__texto">Termínalo en tu billetera o espera a que venza antes de pedir otro: así evitas que la billetera se confunda.</p></div></div>' : '') +
       '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>Pagar mi aporte' + ico('flecha', 'cv-icono--sm') + '</button></section>';
   }
 
@@ -245,7 +247,7 @@ function vResumen() {
     '<div class="cv-resumen"><div class="cv-resumen__fila"><span class="cv-texto-suave">Círculo</span><strong>' + esc(c.name) + '</strong></div><div class="cv-resumen__fila"><span class="cv-texto-suave">Ronda</span><strong class="cv-monto">' + c.round + '</strong></div>' +
     '<div class="cv-resumen__fila cv-resumen__fila--fuerte" style="display:grid;gap:4px"><span class="cv-nota">Se te cobrará</span><span class="cv-monto-grande">' + esc(cobro || '—') + '</span><span class="cv-texto-suave">de tu billetera</span></div>' +
     '<div class="cv-resumen__fila" style="display:grid;gap:4px"><span class="cv-nota cv-texto-suave">Tu círculo recibe</span><span class="cv-monto-grande" style="color:var(--color-texto-secundario)">' + esc(recibe || '—') + '</span><span class="cv-texto-suave">en la caja común</span></div></div>' +
-    '<p class="cv-texto-suave cv-nota">El valor en tu moneda lo fija tu billetera al calcular el pago.' + (p.expiresAt ? ' Autoriza antes de las <strong>' + esc(fmtHora(p.expiresAt)) + '</strong>; después hay que pedirlo de nuevo.' : '') + '</p>' +
+    '<p class="cv-texto-suave cv-nota">El valor en tu moneda lo fija tu billetera al calcular el pago.' + (p.expiresAt ? ' Autoriza antes de las <strong>' + esc(fmtHora(p.expiresAt)) + '</strong>; después hay que pedirlo de nuevo.' : '') + ' Autoriza una sola vez y vuelve aquí; no abras otra solicitud mientras tanto.</p>' +
     (venc ? '<div class="cv-aviso cv-aviso--advertencia" role="alert"><span class="cv-aviso__icono">' + ico('alerta') + '</span><div><p class="cv-aviso__titulo">La cotización venció</p><p class="cv-aviso__texto">Pídela de nuevo para ver el valor actualizado.</p></div></div>'
           : '<div class="cv-aviso cv-aviso--info" role="status"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Convite no guarda tu plata</p><p class="cv-aviso__texto">El pago sale de tu billetera y llega directo a la caja del círculo. Nosotros solo coordinamos.</p></div></div>') +
     '<div style="display:grid;gap:12px">' + (venc ? '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="pagar">' + ico('refrescar', 'cv-icono--sm') + 'Pedirlo de nuevo</button>'
@@ -324,13 +326,15 @@ function pagar() {
   if (S.ocupado) return;
   S.ocupado = true; S.pago = null; ir('pago1');
   post('/api/circles/' + circleId + '/contribute', { memberId: S.me.id }).then(function (r) {
-    S.ocupado = false; S.pago = r; ir('resumen');
+    S.ocupado = false; S.pago = r; guardarPend(r.contributionId); ir('resumen');
   }).catch(function (e) {
     S.ocupado = false;
     S.resultado = { texto: e.message, paso: 1, seguro: true };
     ir('error');
   });
 }
+function guardarPend(id) { try { sessionStorage.setItem(CLAVE_PEND, String(id)); } catch (e) {} }
+function olvidarPend() { try { sessionStorage.removeItem(CLAVE_PEND); } catch (e) {} }
 function continuar() {
   ir('pago2');
   setTimeout(function () { if (S.view === 'pago2' && S.pago) location.assign(S.pago.redirectUrl); }, 900);
@@ -405,7 +409,7 @@ document.addEventListener('click', function (e) {
   var acc = a.dataset.accion;
   if (acc === 'pagar') pagar();
   else if (acc === 'continuar') continuar();
-  else if (acc === 'inicio') { S.pago = null; ir('inicio'); cargar(); }
+  else if (acc === 'inicio') { if (S.view === 'resumen' || S.view === 'pago2') olvidarPend(); S.pago = null; ir('inicio'); cargar(); }
   else if (acc === 'ver-libro') { ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   else if (acc === 'vista-abrir') vistaAbrir();
   else if (acc === 'vista-elegir') vistaElegir(a.dataset.id);
@@ -426,18 +430,32 @@ document.addEventListener('keydown', function (e) {
 /* ====================== arranque ====================== */
 // Mensajes del callback (?ok=1 o ?error=texto). Se limpian de la URL para que al recargar no reaparezcan.
 // "No se te cobró nada" solo se afirma en los casos que ocurren antes de crear el pago.
+function clasificar(msg) {
+  var antes = /rechaz|venci|Hash|inválid/i.test(msg), sinRed = /conectar|conexión/i.test(msg);
+  return { texto: msg, paso: antes ? 2 : (sinRed ? 1 : 3), seguro: antes || sinRed };
+}
+var CLAVE_PEND = 'convite.pend.' + circleId; // id del aporte que mandamos a autorizar (solo en esta pestaña)
 function leerResultado() {
   var ok = qs.get('ok'), err = qs.get('error');
   if (!ok && !err) return;
   history.replaceState(null, '', location.pathname + '?circle=' + circleId);
-  if (ok) { S.resultado = { ok: true }; return; }
-  var antes = /rechaz|venci|Hash|inválid/i.test(err), sinRed = /conectar|conexión/i.test(err);
-  S.resultado = { texto: err, paso: antes ? 2 : (sinRed ? 1 : 3), seguro: antes || sinRed };
+  try { sessionStorage.removeItem(CLAVE_PEND); } catch (e) {}
+  S.resultado = ok ? { ok: true } : clasificar(err);
+}
+// Si la persona volvió a mano (sin pasar por el callback), mostramos cómo terminó su aporte
+function revisarPendiente() {
+  var id = null; try { id = sessionStorage.getItem(CLAVE_PEND); } catch (e) {}
+  if (!id || S.resultado) return Promise.resolve();
+  return api('/api/contributions/' + id).then(function (c) {
+    if (c.status === 'pending' || c.status === 'processing') return;
+    try { sessionStorage.removeItem(CLAVE_PEND); } catch (e) {}
+    S.resultado = c.status === 'confirmed' ? { ok: true } : clasificar(c.error || 'No recibimos tu aprobación.');
+  }).catch(function () {});
 }
 leerResultado();
 temaIcono();
 render(false);
-cargar().then(function () {
+cargar().then(revisarPendiente).then(function () {
   if (S.resultado && S.data) { ir(S.resultado.ok ? 'exito' : 'error'); if (S.resultado.ok) anunciar('Tu aporte quedó confirmado'); }
 });
 setInterval(function () { if (S.view === 'inicio') cargar(true); }, 5000);
