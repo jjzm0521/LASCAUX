@@ -113,6 +113,8 @@ function yo() {
   var id = Number(leer('convite.yo.' + circleId));
   return ms.find(function (m) { return m.id === id; }) || ms[0] || null;
 }
+function tieneIdentidad() { var id = Number(leer('convite.yo.' + circleId)); return !!(S.data && S.data.members.some(function (m) { return m.id === id; })); }
+function destinoInicial() { return S.data && S.data.members.length && !tieneIdentidad() ? 'quien' : 'inicio'; }
 function activoPote() { // moneda de la caja: la trae el círculo o sale del libro (receive); si no hay ninguna, no se inventa
   var c = S.data.circle;
   if (c && c.assetCode && c.assetScale != null) return { assetCode: c.assetCode, assetScale: c.assetScale };
@@ -220,7 +222,7 @@ function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
   var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
   var cuenta = vCuenta(d, me, pote);
-  var agregarPersonas = '<section class="cv-tarjeta" aria-labelledby="t-agr"><h2 id="t-agr" class="cv-tarjeta__titulo">¿Falta alguien?</h2><p class="cv-tarjeta__cuerpo" style="margin:6px 0 14px">Agrega la billetera de prueba de otra persona para que aporte desde la suya.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Agregar una billetera</button></section>';
+  var agregarPersonas = '<section class="cv-tarjeta" aria-labelledby="t-agr"><h2 id="t-agr" class="cv-tarjeta__titulo">¿Eres nueva persona?</h2><p class="cv-tarjeta__cuerpo" style="margin:6px 0 14px">Crea tu usuario con tu billetera de prueba para aportar desde la tuya.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear mi usuario</button></section>';
   var pendienteYo = d.ledger.some(function (l) { return l.member_id === me.id && l.round === c.round && l.status === 'pending'; });
 
   var selector = '<div class="cv-vista"><button type="button" class="cv-vista__boton" id="vista-boton" data-accion="vista-abrir" aria-haspopup="listbox" aria-expanded="false">' +
@@ -230,7 +232,7 @@ function vInicio() {
     d.members.map(function (m, i) {
       return '<li role="option" class="cv-vista__opcion" data-accion="vista-elegir" data-id="' + m.id + '" aria-selected="' + (m.id === me.id) + '" tabindex="-1">' +
         avatar(m, i, ' cv-avatar--sm') + '<span>' + esc(m.name) + '</span>' + (m.id === me.id ? ico('check', 'cv-icono--sm') : '') + '</li>';
-    }).join('') + '</ul></div>';
+    }).join('') + '<li role="option" class="cv-vista__opcion" data-accion="agregar-miembro" aria-selected="false" tabindex="-1">' + ico('billetera', 'cv-icono--sm') + '<span>Soy otra persona: crear mi usuario</span></li></ul></div>';
 
   var proximo;
   if (me.hasContributed) {
@@ -257,7 +259,7 @@ function vInicio() {
       return '<li class="cv-miembro">' + avatar(m, i, soy ? ' cv-avatar--yo' : '') + '<div class="cv-miembro__texto"><div class="cv-miembro__nombre">' + esc(m.name) + (soy ? ' (tú)' : '') + '</div>' +
         '<div class="cv-miembro__meta">' + esc(m.assetCode ? 'Billetera en ' + m.assetCode : (PAISES[m.country] || m.country)) + ' · turno ' + m.turn + '</div><div style="margin-top:6px">' + chipMiembro(m) + '</div></div></li>';
     }).join('') + '</ul></div>' +
-    '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Agregar una billetera</button></section>';
+    '<button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear mi usuario</button></section>';
 
   var ESTADO = { confirmed: ['confirmado', 'check', 'Confirmado'], pending: ['espera', 'reloj', 'Esperando autorización'], failed: ['fallo', 'alerta', 'Falló'] };
   var libro = '<section class="cv-seccion" aria-labelledby="s-libro"><div class="cv-seccion__cabecera"><h2 id="s-libro" class="cv-seccion__titulo">Libro de aportes</h2></div>' +
@@ -399,12 +401,12 @@ function vAgregar() {
       ' aria-describedby="' + id + '-ayuda' + (err[id] ? ' ' + id + '-error' : '') + '"' + (err[id] ? ' aria-invalid="true"' : '') + '></div>' +
       (err[id] ? '<p class="cv-campo__error" id="' + id + '-error" role="alert">' + esc(err[id]) + '</p>' : '') + '</div>';
   };
-  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Agregar una billetera</h1><p class="cv-texto-suave" style="margin-top:4px">Suma a alguien al círculo con su propia billetera de prueba. Cada quien autoriza sus pagos desde la suya.</p></div>' +
+  return barraVolver(true) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">Crear mi usuario</h1><p class="cv-texto-suave" style="margin-top:4px">Entra al círculo con tu nombre y tu propia billetera de prueba. Cada quien autoriza sus pagos desde la suya.</p></div>' +
     '<form id="form-miembro" class="cv-tarjeta" style="display:grid;gap:20px" novalidate>' +
     campo('nombre', 'Nombre', 'Cómo lo verá el círculo. Por ejemplo: Camila.', f.nombre, 'maxlength="40" autocomplete="name"') +
     campo('billetera', 'Dirección de la billetera', 'La de tu cuenta en wallet.interledger-test.dev. Por ejemplo: $ilp.interledger-test.dev/camila', f.billetera, 'inputmode="url"') +
     '<div class="cv-aviso cv-aviso--info" role="note"><span class="cv-aviso__icono">' + ico('info') + '</span><div><p class="cv-aviso__titulo">Solo billeteras de prueba</p><p class="cv-aviso__texto">Es dinero de juguete. Convite no guarda tu plata ni pide claves: la autorización se hace en tu billetera.</p></div></div>' +
-    '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (S.ocupado ? CARGADOR + 'Revisando la billetera…' : 'Agregar al círculo') + '</button>' +
+    '<div style="display:grid;gap:12px"><button type="submit" class="cv-btn cv-btn--primario cv-btn--bloque"' + (S.ocupado ? ' disabled aria-busy="true"' : '') + '>' + (S.ocupado ? CARGADOR + 'Revisando la billetera…' : 'Entrar al círculo') + '</button>' +
     '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="inicio">Cancelar</button></div></form></main>';
 }
 function guardarMiembro(e) {
@@ -421,8 +423,8 @@ function guardarMiembro(e) {
   post('/api/circles/' + circleId + '/members', { name: nombre, wallet: billetera }).then(function (r) {
     S.ocupado = false; S.form = null; S.formError = null;
     var m = r.member || r; if (m && m.id) guardar('convite.yo.' + circleId, m.id);
-    S.tab = 'miembros'; ir('inicio'); cargar();
-    aviso('exito', 'Billetera agregada', nombre + ' ya hace parte del círculo.');
+    S.tab = 'inicio'; ir('inicio'); cargar(); // lo siguiente que le toca a una persona nueva es pagar su aporte
+    aviso('exito', 'Ya estás en el círculo', nombre + ', ya puedes aportar desde tu billetera.');
   }).catch(function (er) {
     S.ocupado = false;
     var enNombre = /nombre/i.test(er.message) && !/billetera/i.test(er.message);
@@ -497,7 +499,20 @@ function guardarCirculo(e) {
 function vSinMiembros() {
   return barraVolver(false) + '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(S.data.circle.name) + '</h1><p class="cv-texto-suave">' + esc(etiquetaTipo(S.data.circle.kind)) + ' · Ronda ' + S.data.circle.round + '</p></div>' +
     '<div class="cv-tarjeta"><div class="cv-vacio"><h2 class="cv-vacio__titulo">Todavía no hay personas</h2><p class="cv-vacio__texto">Agrega la primera billetera. Cada persona entra con su propia billetera de prueba y autoriza sus pagos desde ahí.</p>' +
-    '<button type="button" class="cv-btn cv-btn--primario" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Agregar la primera billetera</button></div></div>' +
+    '<button type="button" class="cv-btn cv-btn--primario" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear el primer usuario</button></div></div>' +
+    '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="circulos">Ver todos mis círculos</button></main>';
+}
+function vQuien() {
+  var d = S.data;
+  var lista = d.members.map(function (m, i) {
+    return '<li><button type="button" class="cv-fila cv-fila--interactiva" data-accion="soy" data-id="' + m.id + '" aria-label="Soy ' + esc(m.name) + '">' + avatar(m, i) +
+      '<span class="cv-fila__texto"><span class="cv-fila__quien">' + esc(m.name) + '</span><span class="cv-fila__cuando">' + esc(m.assetCode ? 'Billetera en ' + m.assetCode : (PAISES[m.country] || m.country)) + '</span></span>' +
+      '<span class="cv-fila__valor"><span class="cv-fila__ver">Soy yo</span></span></button></li>';
+  }).join('');
+  return '<main class="cv-contenido"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">¿Quién eres en este círculo?</h1><p class="cv-texto-suave" style="margin-top:4px">' + esc(d.circle.name) + '. Elige tu nombre o crea tu usuario con tu propia billetera de prueba.</p></div>' +
+    '<ul class="cv-libro" aria-label="Personas del círculo">' + lista + '</ul>' +
+    '<div class="cv-tarjeta" style="display:grid;gap:12px"><h2 class="cv-tarjeta__titulo">¿No estás en la lista?</h2><p class="cv-texto-suave">Crea tu usuario con tu nombre y la dirección de tu billetera de prueba. Cada quien autoriza sus pagos desde la suya.</p>' +
+    '<button type="button" class="cv-btn cv-btn--primario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Crear mi usuario</button></div>' +
     '<button type="button" class="cv-btn cv-btn--fantasma cv-btn--bloque" data-accion="circulos">Ver todos mis círculos</button></main>';
 }
 function vFalloCarga() {
@@ -505,7 +520,7 @@ function vFalloCarga() {
 }
 
 /* ====================== render ====================== */
-var VISTAS = { circulos: vCirculos, crear: vCrear, agregar: vAgregar, comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: function () { return S.me ? vInicio() : vSinMiembros(); }, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
+var VISTAS = { quien: vQuien, circulos: vCirculos, crear: vCrear, agregar: vAgregar, comprobante: vComprobante, arranque: vArranque, cargando: vCargando, inicio: function () { return S.me ? vInicio() : vSinMiembros(); }, resumen: vResumen, pago1: function () { return vPago(1); }, pago2: function () { return vPago(2); }, exito: vExito, error: vError, fallo: vFalloCarga };
 function render(enfocar) {
   if (S.data) S.me = yo();
   document.querySelector('.app').classList.toggle('app--arranque', S.view === 'arranque');
@@ -522,8 +537,8 @@ function cargar(silencioso) {
     var cambio = huella !== S.huella;
     S.huella = huella; S.data = d;
     if (!S.me) S.me = yo();
-    if (S.view === 'arranque') { setTimeout(function () { if (S.view === 'arranque') ir('inicio', false); }, Math.max(0, S.minArranque - Date.now())); }
-    else if (S.view === 'cargando' || S.view === 'fallo') { ir('inicio', false); }
+    if (S.view === 'arranque') { setTimeout(function () { if (S.view === 'arranque') ir(destinoInicial(), false); }, Math.max(0, S.minArranque - Date.now())); }
+    else if (S.view === 'cargando' || S.view === 'fallo') { ir(destinoInicial(), false); }
     else if (S.view === 'inicio' && cambio && !silencioso) { render(false); }
     else if (S.view === 'inicio' && cambio && !hayInteraccionAbierta()) { render(false); }
   }).catch(function (e) {
@@ -619,13 +634,14 @@ function temaIcono() {
 
 /* ====================== eventos ====================== */
 document.addEventListener('click', function (e) {
-  if (S.view === 'arranque' && S.data) { ir('inicio', false); return; }
+  if (S.view === 'arranque' && S.data) { ir(destinoInicial(), false); return; }
   var a = e.target.closest('[data-accion]'); if (!a) { var l = $('vista-lista'); if (l && !l.hidden && !e.target.closest('.cv-vista')) vistaAbrir(false); return; }
   var acc = a.dataset.accion;
   if (acc === 'pagar') pagar();
   else if (acc === 'continuar') continuar();
   else if (acc === 'inicio') { if (S.view === 'resumen' || S.view === 'pago2') olvidarPend(); S.pago = null; ir('inicio'); cargar(); }
   else if (acc === 'ver-libro') { S.tab = 'libro'; ir('inicio', false); var s = $('s-libro'); if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  else if (acc === 'soy') { guardar('convite.yo.' + circleId, a.dataset.id); S.me = null; ir('inicio'); anunciar('Ahora ves el círculo como ' + (S.me ? S.me.name : '')); }
   else if (acc === 'circulos') location.assign('/?lista=1');
   else if (acc === 'crear-circulo') { S.formC = null; S.formCError = null; ir('crear'); }
   else if (acc === 'agregar-miembro') { S.form = null; S.formError = null; ir('agregar'); }
@@ -650,7 +666,7 @@ document.addEventListener('keydown', function (e) {
   var ops = Array.prototype.slice.call(l.children), i = ops.indexOf(document.activeElement);
   if (e.key === 'ArrowDown') { e.preventDefault(); ops[(i + 1) % ops.length].focus(); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); ops[(i - 1 + ops.length) % ops.length].focus(); }
-  else if (e.key === 'Enter' || e.key === ' ') { if (i >= 0) { e.preventDefault(); vistaElegir(ops[i].dataset.id); } }
+  else if (e.key === 'Enter' || e.key === ' ') { if (i >= 0) { e.preventDefault(); if (ops[i].dataset.accion) ops[i].click(); else vistaElegir(ops[i].dataset.id); } }
   else if (e.key === 'Escape') { e.preventDefault(); vistaAbrir(false); }
 });
 
