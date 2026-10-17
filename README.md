@@ -2,6 +2,11 @@
 
 Miembros de un círculo (en Medellín, EE. UU., España o donde estén) aportan **en su propia moneda** (`COP`, `USD`, etc.) y reciben entregas o repartos en su billetera local. Todos ven el libro auditable al instante, las salidas requieren **aprobación proporcional del grupo** (50 %, mayoría, 2/3 o unanimidad, sin que el beneficiario vote su propia entrega) y la reputación colectiva del círculo se calcula del libro de Convite a partir de los aportes confirmados (sin ML ni scoring individual). Un aporte queda «confirmado» cuando la billetera acepta crear el pago saliente; la app no consulta la liquidación final en la red (ver [límites conocidos](AI_USAGE.md#33-límites-que-el-equipo-reconoce)).
 
+## Demo pregrabada (43 s)
+Un pago de punta a punta: solicitud, autorización, ejecución y éxito, con subtítulos en español e inglés.
+- Ver el video: [docs/demo/convite-demo-pago.mp4](https://github.com/jjzm0521/LAUCAUX/blob/main/docs/demo/convite-demo-pago.mp4)
+- Descarga directa: [convite-demo-pago.mp4](https://github.com/jjzm0521/LAUCAUX/raw/main/docs/demo/convite-demo-pago.mp4)
+
 ## Tres modalidades culturales (Contrato v2)
 - **Cadena (`cadena`):** Monto fijo por ronda definido al crear el círculo; recibe una persona por ronda según su orden de turno cuando todos aportaron, avanzando automáticamente a la siguiente ronda.
 - **Natillera (`natillera`):** Aporte libre en cada ronda, visualización en tiempo real de la participación proporcional de cada miembro (*"Así se repartiría hoy"*) y cierre de ciclo aprobado por el grupo que genera los pagos de reparto exactos (con aritmética `BigInt` y residuo asignado al mayor aportante).
