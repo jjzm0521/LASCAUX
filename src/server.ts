@@ -86,6 +86,92 @@ function expirePendingContributions(circleId?: number) {
   }
 }
 
+// Lista de círculos (más reciente primero) para la pantalla "Tus círculos"
+app.get('/api/circles', (_req, res) => {
+  const rows = db.prepare(
+    `SELECT c.id, c.name, c.kind, c.round, c.contribution, c.min_approvals,
+      c.asset_code AS assetCode, c.asset_scale AS assetScale,
+      (SELECT COUNT(*) FROM members m WHERE m.circle_id=c.id) AS members
+     FROM circles c ORDER BY c.id DESC`,
+  ).all();
+  res.json({ circles: rows });
+});
+
+const MAX_CIRCLES = 20;
+const KINDS = ['natillera', 'cadena', 'circulo'];
+
+// Crear un círculo: valida la billetera de la caja contra Open Payments y convierte el aporte a unidades mínimas
+app.post('/api/circles', async (req, res) => {
+  try {
+    const ip = req.ip || req.socket.remoteAddress || 'local';
+    if (!checkMemberRateLimit('circulo:' + ip)) {
+      return res.status(429).json({ error: 'Demasiados intentos seguidos. Espera un minuto e intenta de nuevo.' });
+    }
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+    if (name.length > 60) return res.status(400).json({ error: 'El nombre no puede superar los 60 caracteres' });
+
+    const kind = req.body?.kind;
+    if (!KINDS.includes(kind)) return res.status(400).json({ error: 'El tipo de círculo no es válido' });
+
+    const minApprovals = Number(req.body?.min_approvals);
+    if (!Number.isInteger(minApprovals) || minApprovals < 1 || minApprovals > 4) {
+      return res.status(400).json({ error: 'Las aprobaciones deben ser un número entre 1 y 4' });
+    }
+
+    const rawWallet = typeof req.body?.pot_wallet === 'string' ? req.body.pot_wallet.trim() : '';
+    if (!rawWallet) return res.status(400).json({ error: 'La billetera de la caja es obligatoria' });
+    const walletUrl = toUrl(rawWallet);
+    if (!isAllowedWalletUrl(walletUrl)) {
+      return res.status(400).json({ error: 'Solo se permiten billeteras de la red de pruebas (.interledger-test.dev)' });
+    }
+
+    const amountText = typeof req.body?.amount === 'string' ? req.body.amount.trim() : String(req.body?.amount ?? '');
+    if (!/^\d+(\.\d+)?$/.test(amountText) || Number(amountText) <= 0) {
+      return res.status(400).json({ error: 'El aporte debe ser un número mayor que cero, por ejemplo 10' });
+    }
+
+    if ((db.prepare('SELECT COUNT(*) n FROM circles').get() as any).n >= MAX_CIRCLES) {
+      return res.status(400).json({ error: 'Ya hay demasiados círculos en este servidor' });
+    }
+
+    let wa: { id: string; assetCode: string; assetScale: number };
+    try {
+      const c = await getClient();
+      wa = await c.walletAddress.get({ url: walletUrl });
+    } catch {
+      return res.status(400).json({ error: 'No encontramos esa billetera. Revisa la dirección.' });
+    }
+    if (!wa?.id || !wa?.assetCode || typeof wa.assetScale !== 'number') {
+      return res.status(400).json({ error: 'No encontramos esa billetera. Revisa la dirección.' });
+    }
+
+    // Aporte en unidades mínimas del activo de la caja, sin números decimales flotantes
+    const [entero, dec = ''] = amountText.split('.');
+    if (dec.length > wa.assetScale) {
+      return res.status(400).json({ error: `El aporte no puede tener más de ${wa.assetScale} decimales en ${wa.assetCode}` });
+    }
+    const contribution = Number(BigInt(entero) * 10n ** BigInt(wa.assetScale) + BigInt(dec.padEnd(wa.assetScale, '0') || '0'));
+    if (!Number.isSafeInteger(contribution) || contribution <= 0) {
+      return res.status(400).json({ error: 'El aporte es demasiado grande o demasiado pequeño' });
+    }
+
+    if ((db.prepare('SELECT COUNT(*) n FROM circles').get() as any).n >= MAX_CIRCLES) {
+      return res.status(400).json({ error: 'Ya hay demasiados círculos en este servidor' });
+    }
+    const ins = db
+      .prepare('INSERT INTO circles (name, kind, pot_wallet, contribution, min_approvals, asset_code, asset_scale) VALUES (?,?,?,?,?,?,?)')
+      .run(name, kind, wa.id, contribution, minApprovals, wa.assetCode, wa.assetScale);
+    const id = Number(ins.lastInsertRowid);
+    res.status(201).json({
+      circle: { id, name, kind, round: 1, contribution, min_approvals: minApprovals, pot_wallet: wa.id, assetCode: wa.assetCode, assetScale: wa.assetScale },
+    });
+  } catch (e: any) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Estado completo del círculo: miembros, libro de aportes, desembolsos, reputación
 app.get('/api/circles/:id', (req, res) => {
   const id = Number(req.params.id);
@@ -156,7 +242,7 @@ app.get('/api/circles/:id', (req, res) => {
     approvedBy: (approvalsStmt.all(p.id) as { member_id: number }[]).map((a) => a.member_id),
   }));
 
-  res.json({ circle: { ...circle, currentTurn }, members, ledger, payouts, reputation: reputation(id) });
+  res.json({ circle: { ...circle, currentTurn, assetCode: circle.asset_code ?? null, assetScale: circle.asset_scale ?? null }, members, ledger, payouts, reputation: reputation(id) });
 });
 
 // Alta de miembro con su propia billetera verificada contra Open Payments

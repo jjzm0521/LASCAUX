@@ -60,6 +60,9 @@ const memberCols = db.prepare('PRAGMA table_info(members)').all() as { name: str
 if (!memberCols.some((c) => c.name === 'asset_code')) {
   db.exec('ALTER TABLE members ADD COLUMN asset_code TEXT');
 }
+const circleCols = db.prepare('PRAGMA table_info(circles)').all() as { name: string }[];
+if (!circleCols.some((c) => c.name === 'asset_code')) db.exec('ALTER TABLE circles ADD COLUMN asset_code TEXT');
+if (!circleCols.some((c) => c.name === 'asset_scale')) db.exec('ALTER TABLE circles ADD COLUMN asset_scale INTEGER');
 const contribCols = db.prepare('PRAGMA table_info(contributions)').all() as { name: string }[];
 for (const col of ['receive_json', 'expires_at', 'error_msg', 'confirmed_at']) {
   if (!contribCols.some((c) => c.name === col)) {

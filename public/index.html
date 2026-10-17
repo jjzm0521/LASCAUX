@@ -220,6 +220,7 @@ function vInicio() {
   var d = S.data, c = d.circle, me = S.me, pote = activoPote();
   var monto = pote ? fmtMonto({ value: c.contribution, assetCode: pote.assetCode, assetScale: pote.assetScale }) : null;
   var cuenta = vCuenta(d, me, pote);
+  var agregarPersonas = '<section class="cv-tarjeta" aria-labelledby="t-agr"><h2 id="t-agr" class="cv-tarjeta__titulo">¿Falta alguien?</h2><p class="cv-tarjeta__cuerpo" style="margin:6px 0 14px">Agrega la billetera de prueba de otra persona para que aporte desde la suya.</p><button type="button" class="cv-btn cv-btn--secundario cv-btn--bloque" data-accion="agregar-miembro">' + ico('billetera', 'cv-icono--sm') + 'Agregar una billetera</button></section>';
   var pendienteYo = d.ledger.some(function (l) { return l.member_id === me.id && l.round === c.round && l.status === 'pending'; });
 
   var selector = '<div class="cv-vista"><button type="button" class="cv-vista__boton" id="vista-boton" data-accion="vista-abrir" aria-haspopup="listbox" aria-expanded="false">' +
@@ -293,8 +294,8 @@ function vInicio() {
     (!d.payouts.length && !me.canRequestPayout ? '<div class="cv-tarjeta"><div class="cv-vacio"><h3 class="cv-vacio__titulo">Todavía no hay entregas</h3><p class="cv-vacio__texto">Cuando a alguien le toque, podrá pedirla y el círculo la aprobará aquí.</p></div></div>' : '') +
     '<p class="cv-nota cv-texto-suave">Por ahora la entrega se aprueba y queda anotada en el libro; el envío del dinero es un siguiente paso del proyecto.</p></section>';
 
-  return '<main class="cv-contenido" id="principal" data-tab="' + S.tab + '"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p></div>' +
-    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', reputacion) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
+  return '<main class="cv-contenido" id="principal" data-tab="' + S.tab + '"><div><h1 class="cv-titulo-1" tabindex="-1" id="titulo">' + esc(c.name) + '</h1><p class="cv-texto-suave">Ronda ' + c.round + ' · ' + d.members.length + ' miembros</p><button type="button" class="cv-enlace" data-accion="circulos" style="padding-left:0">Cambiar de círculo o crear otro</button></div>' +
+    selector + '<div class="app__cols"><div class="app__col app__col--lado">' + sec('inicio', proximo) + sec('inicio', reputacion) + sec('inicio', agregarPersonas) + sec('miembros', miembros) + sec('cuenta', cuenta) + '</div><div class="app__col app__col--lista">' + sec('libro', libro) + sec('entregas', entregas) + '</div></div></main>' + navInferior(d, me);
 }
 
 function vResumen() {
