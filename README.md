@@ -4,8 +4,8 @@ Miembros de un círculo (en Medellín, EE. UU., España o donde estén) aportan 
 
 ## Demo pregrabada (43 s)
 Un pago de punta a punta: solicitud, autorización, ejecución y éxito, con subtítulos en español e inglés.
-- Ver el video: [docs/demo/convite-demo-pago.mp4](https://github.com/jjzm0521/LAUCAUX/blob/main/docs/demo/convite-demo-pago.mp4)
-- Descarga directa: [convite-demo-pago.mp4](https://github.com/jjzm0521/LAUCAUX/raw/main/docs/demo/convite-demo-pago.mp4)
+- Ver el video: [docs/demo/convite-demo-pago.mp4](https://github.com/jjzm0521/LASCAUX/blob/main/docs/demo/convite-demo-pago.mp4)
+- Descarga directa: [convite-demo-pago.mp4](https://github.com/jjzm0521/LASCAUX/raw/main/docs/demo/convite-demo-pago.mp4)
 
 ## Tres modalidades culturales (Contrato v2)
 - **Cadena (`cadena`):** Monto fijo por ronda definido al crear el círculo; recibe una persona por ronda según su orden de turno cuando todos aportaron, avanzando automáticamente a la siguiente ronda.
